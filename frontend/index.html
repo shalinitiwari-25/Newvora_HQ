@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Newvora HQ</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Mobile Header -->
+    <header class="mobile-bar">
+      <div class="brand-title">Newvora HQ</div>
+      <button type="button" class="btn btn-secondary mobile-menu-btn" id="mobileMenuToggle">Menu</button>
+    </header>
+
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="brand">
+          <div class="brand-name">Newvora HQ</div>
+          <div class="brand-tag">Internal Workspace</div>
+        </div>
+      </div>
+
+      <!-- Who are you? Member Selector -->
+      <div class="user-selector-panel">
+        <label for="memberSelect" class="field-label">Who are you?</label>
+        <select id="memberSelect" class="form-select">
+          <option value="" disabled selected>Select your name</option>
+        </select>
+        <button type="button" class="btn btn-subtle btn-sm mt-2" id="btnAddMemberToggle">+ Add member</button>
+
+        <!-- Inline Add Member Form -->
+        <div id="addMemberForm" class="add-member-form hidden">
+          <input type="text" id="newMemberName" class="form-input form-input-sm" placeholder="Full name" autocomplete="off" />
+          <input type="text" id="newMemberRole" class="form-input form-input-sm mt-1" placeholder="Role (e.g. Client Lead)" autocomplete="off" />
+          <div class="form-actions mt-2">
+            <button type="button" class="btn btn-primary btn-sm" id="btnSaveMember">Save</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btnCancelMember">Cancel</button>
+          </div>
+          <div id="memberErrorMsg" class="form-error hidden"></div>
+        </div>
+      </div>
+
+      <!-- Navigation Links -->
+      <nav class="nav-menu">
+        <a href="#inbox" class="nav-link active" data-view="inbox">Inbox</a>
+        <a href="#board" class="nav-link" data-view="board">Board</a>
+        <a href="#clients" class="nav-link" data-view="clients">Clients</a>
+        <a href="#money" class="nav-link" data-view="money">Money</a>
+        <a href="#activity" class="nav-link" data-view="activity">Activity</a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="active-member-display">
+          <span class="text-muted">Working as:</span>
+          <strong id="activeMemberName">Guest</strong>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      <!-- Top Status Bar -->
+      <header class="top-bar">
+        <div class="page-title-wrap">
+          <h1 id="pageTitle" class="page-heading">Inbox</h1>
+          <p id="pageDescription" class="page-subheading">Turn incoming WhatsApp requests into actionable tasks.</p>
+        </div>
+        <div class="top-bar-meta">
+          <span class="status-indicator">Gemma 2 via Gemini API</span>
+        </div>
+      </header>
+
+      <!-- View Containers -->
+      <div class="view-viewport">
+        <!-- ================================================================
+             VIEW: INBOX (Stage 2)
+             ================================================================ -->
+        <section id="view-inbox" class="view-pane active">
+          <div class="panel">
+            <div class="panel-header">
+              <h2 class="panel-title">WhatsApp Client Intake</h2>
+              <span class="panel-subtitle">Paste incoming client messages to parse requests with Gemma</span>
+            </div>
+            <div class="panel-body">
+              <form id="inboxForm" class="inbox-form">
+                <div class="form-row">
+                  <div class="form-group flex-1">
+                    <label for="inboxClientSelect" class="field-label">Select Client</label>
+                    <select id="inboxClientSelect" class="form-select" required>
+                      <option value="" disabled selected>Loading clients...</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="form-group mt-3">
+                  <div class="label-row">
+                    <label for="inboxMessage" class="field-label">WhatsApp Message (English or Hinglish)</label>
+                    <div class="sample-prompts">
+                      <span class="sample-label">Try sample:</span>
+                      <button type="button" class="btn-sample" id="sampleBtn1">Multi-request (Hinglish)</button>
+                      <button type="button" class="btn-sample" id="sampleBtn2">Vague request</button>
+                    </div>
+                  </div>
+                  <textarea id="inboxMessage" class="form-textarea" rows="4" placeholder="Paste WhatsApp message text here, or paste/attach a chat screenshot below (e.g. 'Hey Riya, website pe booking slot duplicate ho raha hai, please fix urgent!')"></textarea>
+                </div>
+
+                <div class="form-group mt-3">
+                  <div class="label-row">
+                    <label class="field-label">WhatsApp Chat Screenshot (Optional)</label>
+                    <span class="text-muted" style="font-size: 11px;">Gemma will read &amp; deduce tasks directly from screenshot</span>
+                  </div>
+
+                  <div id="inboxDropzone" class="image-dropzone" tabindex="0">
+                    <input type="file" id="inboxImageInput" accept="image/*" class="hidden">
+                    <div class="dropzone-inner">
+                      <span class="dropzone-text">Paste screenshot with <kbd>Ctrl+V</kbd>, or drag &amp; drop an image here</span>
+                      <button type="button" class="btn btn-secondary btn-sm" id="btnBrowseImage">Browse image</button>
+                    </div>
+                  </div>
+
+                  <div id="inboxImagePreviewCard" class="image-preview-card mt-2 hidden">
+                    <img id="inboxImagePreview" class="image-preview-thumb" alt="WhatsApp screenshot preview" />
+                    <div class="image-preview-info">
+                      <div class="image-preview-title" id="inboxImageName">whatsapp-screenshot.png</div>
+                      <div class="image-preview-meta text-muted" id="inboxImageMeta">Image attached for Gemma analysis</div>
+                    </div>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btnRemoveImage">Remove</button>
+                  </div>
+                </div>
+
+                <div class="form-actions mt-3">
+                  <button type="submit" class="btn btn-primary" id="btnProcessMessage">Process message</button>
+                  <button type="button" class="btn btn-secondary" id="btnClearMessage">Clear</button>
+                </div>
+              </form>
+
+              <!-- Loading State: Plain text -->
+              <div id="inboxLoading" class="inbox-status-line hidden">
+                <span class="reading-text">Reading message...</span>
+              </div>
+
+              <!-- Error State -->
+              <div id="inboxError" class="form-error mt-3 hidden"></div>
+            </div>
+          </div>
+
+          <!-- Parsed Tasks Container -->
+          <div id="parsedTasksContainer" class="parsed-tasks-container mt-4 hidden">
+            <div class="section-subbar">
+              <h3 class="section-title" id="parsedSectionTitle">Extracted Tasks</h3>
+              <span class="section-tagline">Review, edit, and click "Create task" to save to the board</span>
+            </div>
+            <div id="parsedTasksList" class="tasks-list-grid mt-2"></div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             VIEW: BOARD (Stage 4)
+             ================================================================ -->
+        <section id="view-board" class="view-pane">
+          <!-- Board Controls & Filter -->
+          <div class="sub-header-bar mb-3">
+            <div class="filter-controls">
+              <label for="boardFilterClient" class="filter-label">Client:</label>
+              <select id="boardFilterClient" class="form-select form-select-sm filter-select">
+                <option value="all">All Clients</option>
+              </select>
+
+              <label for="boardFilterAssignee" class="filter-label ml-3">Assignee:</label>
+              <select id="boardFilterAssignee" class="form-select form-select-sm filter-select">
+                <option value="all">All Members</option>
+              </select>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" id="btnRefreshBoard">Refresh board</button>
+          </div>
+
+          <!-- Kanban Columns: To do, Doing, Done -->
+          <div class="board-columns-grid">
+            <!-- Column: To do -->
+            <div class="board-column" id="col-todo">
+              <div class="column-header">
+                <div class="column-title-wrap">
+                  <span class="column-badge-dot dot-todo"></span>
+                  <span class="column-title">To do</span>
+                </div>
+                <span class="column-count" id="count-todo">0</span>
+              </div>
+              <div class="column-cards-list" id="cards-todo"></div>
+            </div>
+
+            <!-- Column: Doing -->
+            <div class="board-column" id="col-doing">
+              <div class="column-header">
+                <div class="column-title-wrap">
+                  <span class="column-badge-dot dot-doing"></span>
+                  <span class="column-title">Doing</span>
+                </div>
+                <span class="column-count" id="count-doing">0</span>
+              </div>
+              <div class="column-cards-list" id="cards-doing"></div>
+            </div>
+
+            <!-- Column: Done -->
+            <div class="board-column" id="col-done">
+              <div class="column-header">
+                <div class="column-title-wrap">
+                  <span class="column-badge-dot dot-done"></span>
+                  <span class="column-title">Done</span>
+                </div>
+                <span class="column-count" id="count-done">0</span>
+              </div>
+              <div class="column-cards-list" id="cards-done"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             VIEW: CLIENTS (Stage 3 + Stage 6)
+             ================================================================ -->
+        <section id="view-clients" class="view-pane">
+          <!-- Clients Main List Pane -->
+          <div id="clientsListPane">
+            <div class="sub-header-bar mb-3">
+              <div>
+                <h2 class="section-title">Client Directory</h2>
+                <span class="section-tagline">Active retainers, monthly fees, and contract terms</span>
+              </div>
+              <button type="button" class="btn btn-primary btn-sm" id="btnOpenAddClient">+ Add client</button>
+            </div>
+
+            <!-- Add / Edit Client Modal Panel -->
+            <div id="clientFormCard" class="panel mb-4 hidden">
+              <div class="panel-header">
+                <h3 class="panel-title" id="clientFormTitle">Add Client</h3>
+              </div>
+              <div class="panel-body">
+                <form id="clientForm">
+                  <input type="hidden" id="editClientId" value="" />
+                  <div class="form-row">
+                    <div class="form-group flex-1">
+                      <label for="clientFormName" class="field-label">Client Name *</label>
+                      <input type="text" id="clientFormName" class="form-input" placeholder="e.g. Apex Dental Clinic" required />
+                    </div>
+                    <div class="form-group flex-1">
+                      <label for="clientFormCompany" class="field-label">Company / Brand *</label>
+                      <input type="text" id="clientFormCompany" class="form-input" placeholder="e.g. Apex Healthcare Ltd" required />
+                    </div>
+                  </div>
+
+                  <div class="form-row mt-3">
+                    <div class="form-group flex-1">
+                      <label for="clientFormPlan" class="field-label">Plan Name</label>
+                      <input type="text" id="clientFormPlan" class="form-input" placeholder="e.g. Retainer Plus" value="Standard Retainer" />
+                    </div>
+                    <div class="form-group flex-1">
+                      <label for="clientFormFee" class="field-label">Monthly Fee ($)</label>
+                      <input type="number" id="clientFormFee" class="form-input" step="10" min="0" placeholder="e.g. 350" value="350" />
+                    </div>
+                    <div class="form-group flex-1">
+                      <label for="clientFormEndDate" class="field-label">Contract End Date</label>
+                      <input type="date" id="clientFormEndDate" class="form-input" />
+                    </div>
+                  </div>
+
+                  <div class="form-group mt-3">
+                    <label for="clientFormNotes" class="field-label">Notes & WhatsApp Context</label>
+                    <textarea id="clientFormNotes" class="form-textarea" rows="2" placeholder="Key contact person, WhatsApp group details, or specific scope..."></textarea>
+                  </div>
+
+                  <div class="form-actions mt-3">
+                    <button type="submit" class="btn btn-primary btn-sm" id="btnSaveClient">Save client</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btnCancelClient">Cancel</button>
+                  </div>
+                  <div id="clientFormError" class="form-error mt-2 hidden"></div>
+                </form>
+              </div>
+            </div>
+
+            <!-- Clients Table -->
+            <div class="panel">
+              <div class="table-responsive">
+                <table class="data-table" id="clientsTable">
+                  <thead>
+                    <tr>
+                      <th>Client Name</th>
+                      <th>Company</th>
+                      <th>Plan</th>
+                      <th>Monthly Fee</th>
+                      <th>Contract End</th>
+                      <th>Active Tasks</th>
+                      <th class="text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="clientsTableBody">
+                    <tr><td colspan="7" class="text-muted text-center py-4">Loading clients...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Client Detail View Pane -->
+          <div id="clientDetailPane" class="hidden">
+            <div class="detail-nav-bar mb-3">
+              <button type="button" class="btn btn-secondary btn-sm" id="btnBackToClients">&larr; Back to clients</button>
+              <div class="form-actions">
+                <button type="button" class="btn btn-primary btn-sm" id="btnWeeklyUpdateAI">Weekly client update</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnEditCurrentClient">Edit client</button>
+              </div>
+            </div>
+
+            <!-- AI Weekly Update Drawer (Stage 6) -->
+            <div id="weeklyUpdateCard" class="panel mb-4 hidden">
+              <div class="panel-header">
+                <h3 class="panel-title">Weekly WhatsApp Update Draft</h3>
+                <span class="panel-subtitle">Generated by Gemma from completed tasks for this client</span>
+              </div>
+              <div class="panel-body">
+                <div id="weeklyUpdateLoading" class="inbox-status-line hidden">
+                  <span class="reading-text">Drafting update message with Gemma...</span>
+                </div>
+                <div id="weeklyUpdateContent">
+                  <textarea id="weeklyUpdateText" class="form-textarea" rows="4" placeholder="AI draft will appear here..."></textarea>
+                  <div class="form-actions mt-2">
+                    <button type="button" class="btn btn-primary btn-sm" id="btnCopyWeeklyUpdate">Copy to clipboard</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btnCloseWeeklyUpdate">Close</button>
+                    <span id="copyFeedback" class="text-muted ml-2 hidden" style="font-size: 11px;">Copied!</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="client-detail-header-panel panel mb-4">
+              <div class="panel-body">
+                <div class="client-header-row">
+                  <div>
+                    <h2 class="client-detail-name" id="detailClientName">Client Name</h2>
+                    <div class="client-detail-meta" id="detailClientCompany">Company</div>
+                  </div>
+                  <div class="client-financial-badge">
+                    <span class="fee-label">Monthly Retainer</span>
+                    <strong class="fee-value" id="detailClientFee">$0/mo</strong>
+                  </div>
+                </div>
+
+                <div class="client-specs-grid mt-3">
+                  <div class="spec-item">
+                    <span class="spec-label">Plan</span>
+                    <span class="spec-val" id="detailClientPlan">Standard</span>
+                  </div>
+                  <div class="spec-item">
+                    <span class="spec-label">Contract End Date</span>
+                    <span class="spec-val" id="detailClientEndDate">Not set</span>
+                  </div>
+                  <div class="spec-item spec-span-2">
+                    <span class="spec-label">Notes</span>
+                    <p class="spec-val-notes" id="detailClientNotes">None</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Client's Tasks List -->
+            <div class="section-subbar mb-2">
+              <h3 class="section-title">Client Deliverables</h3>
+              <span class="section-tagline" id="detailTasksCount">0 tasks</span>
+            </div>
+            <div class="panel">
+              <div class="table-responsive">
+                <table class="data-table">
+                  <thead>
+                    <tr>
+                      <th>Status</th>
+                      <th>Priority</th>
+                      <th>Type</th>
+                      <th>Title</th>
+                      <th>Assigned</th>
+                      <th>Created</th>
+                    </tr>
+                  </thead>
+                  <tbody id="detailTasksTableBody">
+                    <tr><td colspan="6" class="text-muted text-center py-4">No tasks found.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             VIEW: MONEY (Stage 5)
+             ================================================================ -->
+        <section id="view-money" class="view-pane">
+          <!-- Month Filter & Quick Action Bar -->
+          <div class="sub-header-bar mb-3">
+            <div>
+              <h2 class="section-title">Agency Finances</h2>
+              <span class="section-tagline">Track client monthly retainer income, software tool subscriptions, and net cash flow</span>
+            </div>
+            <div class="filter-controls">
+              <label for="moneyMonthSelect" class="filter-label">Month:</label>
+              <select id="moneyMonthSelect" class="form-select form-select-sm filter-select">
+                <option value="2026-10">October 2026</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Financial KPI Metrics -->
+          <div class="financial-metrics-grid mb-4">
+            <div class="panel metric-card">
+              <span class="metric-label">Total Earned</span>
+              <strong class="metric-value metric-income" id="metricTotalIncome">$0.00</strong>
+              <span class="metric-sub" id="metricIncomeCount">0 client retainers</span>
+            </div>
+
+            <div class="panel metric-card">
+              <span class="metric-label">Total Spent</span>
+              <strong class="metric-value metric-expense" id="metricTotalExpenses">$0.00</strong>
+              <span class="metric-sub" id="metricExpenseCount">0 tool subscriptions</span>
+            </div>
+
+            <div class="panel metric-card">
+              <span class="metric-label">Left Over (Net Margin)</span>
+              <strong class="metric-value metric-net" id="metricNetMargin">$0.00</strong>
+              <span class="metric-sub" id="metricMarginPct">0% margin</span>
+            </div>
+          </div>
+
+          <!-- Tool Spending Breakdown (Plain SVG Bar Chart - No Chart Library) -->
+          <div class="panel mb-4">
+            <div class="panel-header">
+              <h3 class="panel-title">Tool Spending Breakdown</h3>
+              <span class="panel-subtitle">Monthly software tool infrastructure costs (SVG visualization)</span>
+            </div>
+            <div class="panel-body">
+              <div id="toolExpensesChartContainer" class="chart-container">
+                <!-- SVG chart rendered via vanilla JS -->
+              </div>
+            </div>
+          </div>
+
+          <!-- Income and Expenses Two-Column Layout -->
+          <div class="finances-two-col">
+            <!-- Left Column: Client Income -->
+            <div class="finance-col">
+              <div class="panel mb-3">
+                <div class="panel-header">
+                  <h3 class="panel-title">Record Client Income</h3>
+                </div>
+                <div class="panel-body">
+                  <form id="incomeForm">
+                    <div class="form-row">
+                      <div class="form-group flex-1">
+                        <label for="incomeClientSelect" class="field-label">Client *</label>
+                        <select id="incomeClientSelect" class="form-select" required>
+                          <option value="" disabled selected>Select client...</option>
+                        </select>
+                      </div>
+                      <div class="form-group flex-1">
+                        <label for="incomeAmount" class="field-label">Amount ($) *</label>
+                        <input type="number" id="incomeAmount" class="form-input" min="1" step="10" placeholder="e.g. 350" required />
+                      </div>
+                    </div>
+                    <div class="form-row mt-2">
+                      <div class="form-group flex-1">
+                        <label for="incomeMonth" class="field-label">Month *</label>
+                        <input type="text" id="incomeMonth" class="form-input" placeholder="YYYY-MM (e.g. 2026-10)" value="2026-10" required />
+                      </div>
+                      <div class="form-group flex-1">
+                        <label for="incomeNotes" class="field-label">Notes</label>
+                        <input type="text" id="incomeNotes" class="form-input" placeholder="e.g. Standard retainer" />
+                      </div>
+                    </div>
+                    <div class="form-actions mt-3">
+                      <button type="submit" class="btn btn-primary btn-sm">Record income</button>
+                    </div>
+                    <div id="incomeFormError" class="form-error mt-2 hidden"></div>
+                  </form>
+                </div>
+              </div>
+
+              <!-- Income Table -->
+              <div class="panel">
+                <div class="panel-header">
+                  <h3 class="panel-title">Income Entries</h3>
+                </div>
+                <div class="table-responsive">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>Client</th>
+                        <th>Month</th>
+                        <th>Amount</th>
+                        <th class="text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="incomeTableBody">
+                      <tr><td colspan="4" class="text-muted text-center py-4">No income recorded.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Column: Tool Expenses -->
+            <div class="finance-col">
+              <div class="panel mb-3">
+                <div class="panel-header">
+                  <h3 class="panel-title">Log Tool Expense</h3>
+                </div>
+                <div class="panel-body">
+                  <form id="expenseForm">
+                    <div class="form-group">
+                      <div class="label-row">
+                        <label for="expenseToolName" class="field-label">Tool / Service Name *</label>
+                        <div class="sample-prompts">
+                          <span class="sample-label">Quick:</span>
+                          <button type="button" class="btn-sample tool-chip" data-tool="Claude">Claude</button>
+                          <button type="button" class="btn-sample tool-chip" data-tool="Supabase">Supabase</button>
+                          <button type="button" class="btn-sample tool-chip" data-tool="Vercel">Vercel</button>
+                          <button type="button" class="btn-sample tool-chip" data-tool="Render">Render</button>
+                          <button type="button" class="btn-sample tool-chip" data-tool="Cursor">Cursor</button>
+                        </div>
+                      </div>
+                      <input type="text" id="expenseToolName" class="form-input" placeholder="e.g. Claude, Supabase, Vercel, Render" required />
+                    </div>
+
+                    <div class="form-row mt-2">
+                      <div class="form-group flex-1">
+                        <label for="expenseAmount" class="field-label">Amount ($) *</label>
+                        <input type="number" id="expenseAmount" class="form-input" min="0.5" step="1" placeholder="e.g. 20" required />
+                      </div>
+                      <div class="form-group flex-1">
+                        <label for="expenseMonth" class="field-label">Month *</label>
+                        <input type="text" id="expenseMonth" class="form-input" placeholder="YYYY-MM (e.g. 2026-10)" value="2026-10" required />
+                      </div>
+                    </div>
+
+                    <div class="form-group mt-2">
+                      <label for="expenseNotes" class="field-label">Notes</label>
+                      <input type="text" id="expenseNotes" class="form-input" placeholder="e.g. Pro tier seat" />
+                    </div>
+
+                    <div class="form-actions mt-3">
+                      <button type="submit" class="btn btn-primary btn-sm">Log expense</button>
+                    </div>
+                    <div id="expenseFormError" class="form-error mt-2 hidden"></div>
+                  </form>
+                </div>
+              </div>
+
+              <!-- Expenses Table -->
+              <div class="panel">
+                <div class="panel-header">
+                  <h3 class="panel-title">Expense Entries</h3>
+                </div>
+                <div class="table-responsive">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>Tool Name</th>
+                        <th>Month</th>
+                        <th>Amount</th>
+                        <th class="text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody id="expenseTableBody">
+                      <tr><td colspan="4" class="text-muted text-center py-4">No expenses recorded.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             VIEW: ACTIVITY (Stage 4)
+             ================================================================ -->
+        <section id="view-activity" class="view-pane">
+          <div class="sub-header-bar mb-3">
+            <div>
+              <h2 class="section-title">Audit Trail & Activity Log</h2>
+              <span class="section-tagline">Chronological log of team updates, task states, finances, and client changes</span>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" id="btnRefreshActivity">Refresh feed</button>
+          </div>
+
+          <div class="panel">
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th style="width: 170px;">Timestamp</th>
+                    <th style="width: 140px;">Team Member</th>
+                    <th style="width: 170px;">Action</th>
+                    <th>Details</th>
+                  </tr>
+                </thead>
+                <tbody id="activityTableBody">
+                  <tr><td colspan="4" class="text-muted text-center py-4">Loading activity log...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
