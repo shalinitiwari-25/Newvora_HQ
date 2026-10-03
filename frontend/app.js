@@ -16,6 +16,14 @@ const VIEW_METADATA = {
     title: "Clients",
     description: "Directory of active client retainers, portals, and terms."
   },
+  dues: {
+    title: "Dues",
+    description: "Track monthly client retainers, overdue payments, and establishment balances."
+  },
+  tools: {
+    title: "Tools",
+    description: "Software subscriptions, monthly costs, renewal dates, and expense logging."
+  },
   money: {
     title: "Money",
     description: "Track monthly income, software expenses, and net margin."
@@ -39,6 +47,11 @@ const state = {
   boardFilterClient: "all",
   boardFilterAssignee: "all",
   selectedFinanceMonth: "2026-10",
+  selectedDuesMonth: "2026-10",
+  duesData: null,
+  toolsData: [],
+  notifications: [],
+  unreadNotificationsCount: 0,
   appInitialized: false
 };
 
@@ -113,6 +126,10 @@ function navigateTo(viewName) {
     loadBoard();
   } else if (viewName === "clients") {
     loadClientsView();
+  } else if (viewName === "dues") {
+    loadDuesView();
+  } else if (viewName === "tools") {
+    loadToolsView();
   } else if (viewName === "money") {
     loadFinances();
   } else if (viewName === "activity") {
@@ -172,6 +189,9 @@ function renderMemberSelect() {
   }
 
   updateActiveMemberDisplay();
+  if (state.activeMemberId) {
+    loadNotifications(state.activeMemberId);
+  }
 }
 
 function updateActiveMemberDisplay() {
@@ -189,6 +209,7 @@ function handleMemberChange(e) {
     state.activeMemberName = found.name;
     localStorage.setItem("newvora_member_id", found.id);
     updateActiveMemberDisplay();
+    loadNotifications(found.id);
   }
 }
 
@@ -230,9 +251,119 @@ async function handleSaveNewMember() {
     localStorage.setItem("newvora_member_id", created.id);
     document.getElementById("memberSelect").value = created.id;
     updateActiveMemberDisplay();
+    loadNotifications(created.id);
   } catch (err) {
     errorDiv.textContent = err.message;
     errorDiv.classList.remove("hidden");
+  }
+}
+
+// ==============================================================================
+// Stage 7: Task Notifications ("Assigned to you")
+// ==============================================================================
+async function loadNotifications(memberId) {
+  if (!memberId) return;
+  try {
+    const res = await fetch(`/api/notifications?member_id=${memberId}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    state.notifications = data.notifications || [];
+    state.unreadNotificationsCount = data.unread_count || 0;
+    updateNotificationBadges();
+    renderAssignedTasksModal();
+  } catch (err) {
+    console.error("Error loading notifications:", err);
+  }
+}
+
+function updateNotificationBadges() {
+  const count = state.unreadNotificationsCount;
+  const badgeSidebar = document.getElementById("memberUnreadBadge");
+  const badgeHeader = document.getElementById("memberHeaderBadge");
+  const assignedCountEl = document.getElementById("assignedCount");
+
+  if (assignedCountEl) {
+    assignedCountEl.textContent = count;
+  }
+
+  [badgeSidebar, badgeHeader].forEach((badge) => {
+    if (!badge) return;
+    if (count > 0) {
+      badge.textContent = count;
+      badge.classList.remove("hidden");
+    } else {
+      badge.classList.add("hidden");
+    }
+  });
+}
+
+function renderAssignedTasksModal() {
+  const listEl = document.getElementById("assignedTasksList");
+  const subtitleEl = document.getElementById("assignedTasksMemberSubtitle");
+  if (!listEl) return;
+
+  if (subtitleEl) {
+    subtitleEl.textContent = `Tasks assigned to ${state.activeMemberName} (${state.notifications.length} total, ${state.unreadNotificationsCount} unread)`;
+  }
+
+  if (state.notifications.length === 0) {
+    listEl.innerHTML = '<div class="text-muted text-center py-4">No tasks currently assigned to you.</div>';
+    return;
+  }
+
+  listEl.innerHTML = "";
+  state.notifications.forEach((item) => {
+    const card = document.createElement("div");
+    card.className = `assigned-task-item ${!item.is_read ? "is-unread" : ""}`;
+
+    let prioClass = "badge-prio-low";
+    if (item.priority === "high") prioClass = "badge-prio-high";
+    if (item.priority === "medium") prioClass = "badge-prio-medium";
+
+    let statusClass = "badge-status";
+    if (item.status === "doing") statusClass = "badge-status-doing";
+    if (item.status === "done") statusClass = "badge-status-done";
+
+    card.innerHTML = `
+      <div class="assigned-task-top">
+        <div>
+          <div class="assigned-task-title">${escapeHtml(item.title)}</div>
+          <div class="assigned-task-meta mt-1">
+            <span><strong>Client:</strong> ${escapeHtml(item.client_name)}</span>
+            <span class="badge ${prioClass}">${escapeHtml(item.priority.toUpperCase())}</span>
+            <span class="badge ${statusClass}">${escapeHtml(item.status.toUpperCase())}</span>
+            <span class="text-muted">${formatDate(item.created_at)}</span>
+          </div>
+        </div>
+        ${!item.is_read ? `
+          <button type="button" class="btn btn-secondary btn-sm btn-mark-read" data-id="${item.notification_id}">
+            Mark as read
+          </button>
+        ` : `
+          <span class="badge badge-status" style="font-size: 10px; color: var(--text-muted);">Read</span>
+        `}
+      </div>
+      ${item.description ? `<div class="card-desc text-muted mt-1" style="font-size: 12px;">${escapeHtml(item.description)}</div>` : ""}
+    `;
+
+    const btnMarkRead = card.querySelector(".btn-mark-read");
+    if (btnMarkRead) {
+      btnMarkRead.addEventListener("click", () => handleMarkNotificationRead(item.notification_id));
+    }
+
+    listEl.appendChild(card);
+  });
+}
+
+async function handleMarkNotificationRead(notificationId) {
+  try {
+    const res = await fetch(`/api/notifications/${notificationId}/read`, {
+      method: "PATCH"
+    });
+    if (!res.ok) throw new Error("Failed to mark notification as read");
+    await loadNotifications(state.activeMemberId);
+  } catch (err) {
+    console.error("Error marking notification read:", err);
   }
 }
 
@@ -351,6 +482,19 @@ async function openClientDetail(clientId) {
     document.getElementById("detailClientNotes").textContent = c.notes || "No notes recorded.";
     document.getElementById("detailTasksCount").textContent = `${tasks.length} total tasks`;
 
+    const bDay = c.billing_day || 1;
+    const estTotal = Number(c.establishment_fee_total || 0);
+    const estPaid = Number(c.establishment_fee_paid || 0);
+    const estRemaining = Math.max(0, estTotal - estPaid);
+
+    const bDayEl = document.getElementById("detailClientBillingDay");
+    if (bDayEl) bDayEl.textContent = `Day ${bDay} of month`;
+
+    const estEl = document.getElementById("detailClientEstablishment");
+    if (estEl) {
+      estEl.textContent = estTotal > 0 ? `$${estPaid.toFixed(0)} / $${estTotal.toFixed(0)} ($${estRemaining.toFixed(0)} remaining)` : "None ($0)";
+    }
+
     renderClientDetailTasks(tasks);
 
     listPane.classList.add("hidden");
@@ -414,6 +558,9 @@ function setupClientFormHandlers() {
       form.reset();
       document.getElementById("clientFormPlan").value = "Standard Retainer";
       document.getElementById("clientFormFee").value = "350";
+      document.getElementById("clientFormBillingDay").value = "1";
+      document.getElementById("clientFormEstablishmentTotal").value = "0";
+      document.getElementById("clientFormEstablishmentPaid").value = "0";
       document.getElementById("clientFormError").classList.add("hidden");
       formCard.classList.remove("hidden");
       document.getElementById("clientFormName").focus();
@@ -523,6 +670,9 @@ function openEditClientForm(client) {
   document.getElementById("clientFormPlan").value = client.plan_name || "Standard Retainer";
   document.getElementById("clientFormFee").value = client.monthly_fee || 0;
   document.getElementById("clientFormEndDate").value = client.contract_end_date || "";
+  document.getElementById("clientFormBillingDay").value = client.billing_day || 1;
+  document.getElementById("clientFormEstablishmentTotal").value = client.establishment_fee_total || 0;
+  document.getElementById("clientFormEstablishmentPaid").value = client.establishment_fee_paid || 0;
   document.getElementById("clientFormNotes").value = client.notes || "";
   document.getElementById("clientFormError").classList.add("hidden");
 
@@ -538,6 +688,9 @@ async function handleSaveClient(e) {
   const plan_name = document.getElementById("clientFormPlan").value.trim() || "Standard Retainer";
   const monthly_fee = parseFloat(document.getElementById("clientFormFee").value) || 0;
   const contract_end_date = document.getElementById("clientFormEndDate").value.trim();
+  const billing_day = parseInt(document.getElementById("clientFormBillingDay").value, 10) || 1;
+  const establishment_fee_total = parseFloat(document.getElementById("clientFormEstablishmentTotal").value) || 0;
+  const establishment_fee_paid = parseFloat(document.getElementById("clientFormEstablishmentPaid").value) || 0;
   const notes = document.getElementById("clientFormNotes").value.trim();
   const errorDiv = document.getElementById("clientFormError");
 
@@ -547,6 +700,9 @@ async function handleSaveClient(e) {
     plan_name,
     monthly_fee,
     contract_end_date,
+    billing_day,
+    establishment_fee_total,
+    establishment_fee_paid,
     notes,
     creator_name: state.activeMemberName,
     updater_name: state.activeMemberName
@@ -808,6 +964,9 @@ async function handleAssignTask(taskId, memberId) {
     });
     if (!res.ok) throw new Error("Failed to update assignee");
     await loadBoardTasks();
+    if (state.activeMemberId) {
+      await loadNotifications(state.activeMemberId);
+    }
   } catch (err) {
     alert("Error assigning task: " + err.message);
   }
@@ -946,6 +1105,9 @@ async function loadFinances() {
 
     const marginPct = data.total_income > 0 ? ((data.net_margin / data.total_income) * 100).toFixed(0) : 0;
     document.getElementById("metricMarginPct").textContent = `${marginPct}% net margin`;
+
+    // Render Money page summary strip (Stage 7)
+    renderMoneySummaryStrip(data.summary_strip);
 
     // Render SVG Bar Chart of Tool Expenses
     renderToolExpensesChart(data.expenses_by_tool, data.total_expenses);
@@ -1224,6 +1386,398 @@ async function handleLogExpense(e) {
   } catch (err) {
     errorDiv.textContent = err.message;
     errorDiv.classList.remove("hidden");
+  }
+}
+
+// ==============================================================================
+// Stage 7: Money Summary Strip
+// ==============================================================================
+function renderMoneySummaryStrip(strip) {
+  const stripEl = document.getElementById("moneySummaryStrip");
+  if (!stripEl) return;
+
+  if (!strip) {
+    stripEl.classList.add("hidden");
+    return;
+  }
+
+  stripEl.classList.remove("hidden");
+  const renewingTools = strip.renewing_tools || [];
+  const toolsListStr = renewingTools
+    .map((t) => `${escapeHtml(t.name)} (in ${t.days_left}d, $${t.monthly_cost.toFixed(0)})`)
+    .join(", ");
+
+  const duesText = strip.pending_dues_count > 0
+    ? `<span><strong>$${strip.pending_dues_total.toFixed(0)} pending</strong> in client dues across ${strip.pending_dues_count} client${strip.pending_dues_count === 1 ? "" : "s"}</span> &mdash; <a class="summary-strip-link" href="#dues" id="linkToDues">View dues &rarr;</a>`
+    : `<span>All client retainers settled for ${escapeHtml(strip.month)}.</span>`;
+
+  const toolsText = strip.renewing_tools_count > 0
+    ? `<span><strong>${strip.renewing_tools_count} tool${strip.renewing_tools_count === 1 ? "" : "s"}</strong> renewing within 7 days: ${toolsListStr}</span> &mdash; <a class="summary-strip-link" href="#tools" id="linkToTools">View tools &rarr;</a>`
+    : `<span>No software tools renewing in next 7 days.</span>`;
+
+  stripEl.innerHTML = `
+    <div class="summary-strip-header">Upcoming Obligations &amp; Dues (${escapeHtml(strip.month)})</div>
+    <div class="summary-strip-content">
+      <div class="summary-strip-item">${duesText}</div>
+      <div class="summary-strip-item">${toolsText}</div>
+    </div>
+  `;
+
+  const linkDues = stripEl.querySelector("#linkToDues");
+  if (linkDues) {
+    linkDues.addEventListener("click", (e) => {
+      e.preventDefault();
+      navigateTo("dues");
+    });
+  }
+
+  const linkTools = stripEl.querySelector("#linkToTools");
+  if (linkTools) {
+    linkTools.addEventListener("click", (e) => {
+      e.preventDefault();
+      navigateTo("tools");
+    });
+  }
+}
+
+// ==============================================================================
+// Stage 7: Dues Management
+// ==============================================================================
+async function loadDuesView() {
+  const monthSelect = document.getElementById("duesMonthSelect");
+  const selectedMonth = monthSelect ? monthSelect.value : state.selectedDuesMonth;
+
+  try {
+    const res = await fetch(`/api/dues?month=${selectedMonth}`);
+    if (!res.ok) throw new Error("Failed to load client dues");
+    const data = await res.json();
+    state.duesData = data;
+
+    // Update KPI metrics
+    const totalPendingEl = document.getElementById("duesTotalPending");
+    if (totalPendingEl) {
+      totalPendingEl.textContent = `$${data.total_pending.toFixed(2)}`;
+    }
+
+    let pendingCount = 0;
+    let estOutstandingTotal = 0;
+    let estCount = 0;
+
+    (data.clients || []).forEach((c) => {
+      if (c.status === "pending" || c.status === "overdue") {
+        pendingCount++;
+      }
+      if (c.establishment_fee_remaining > 0) {
+        estOutstandingTotal += c.establishment_fee_remaining;
+        estCount++;
+      }
+    });
+
+    const pendingCountEl = document.getElementById("duesPendingCount");
+    if (pendingCountEl) {
+      pendingCountEl.textContent = `${pendingCount} client${pendingCount === 1 ? "" : "s"} pending or overdue`;
+    }
+
+    const estOutstandingEl = document.getElementById("duesTotalEstOutstanding");
+    if (estOutstandingEl) {
+      estOutstandingEl.textContent = `$${estOutstandingTotal.toFixed(2)}`;
+    }
+
+    const estCountEl = document.getElementById("duesEstCount");
+    if (estCountEl) {
+      estCountEl.textContent = `${estCount} client${estCount === 1 ? "" : "s"} with remaining balance`;
+    }
+
+    renderDuesTable(data.clients || [], selectedMonth);
+  } catch (err) {
+    console.error("Error loading dues:", err);
+  }
+}
+
+function renderDuesTable(clients, selectedMonth) {
+  const tbody = document.getElementById("duesTableBody");
+  if (!tbody) return;
+
+  if (!clients || clients.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center py-4">No clients found.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = "";
+  clients.forEach((c) => {
+    const tr = document.createElement("tr");
+
+    let statusBadgeClass = "badge-pending";
+    let statusLabel = "PENDING";
+    if (c.status === "paid") {
+      statusBadgeClass = "badge-paid";
+      statusLabel = "PAID";
+    } else if (c.status === "overdue") {
+      statusBadgeClass = "badge-overdue";
+      statusLabel = "OVERDUE";
+    }
+
+    const estText = c.establishment_fee_total > 0
+      ? `$${c.establishment_fee_paid.toFixed(0)} / $${c.establishment_fee_total.toFixed(0)} <span class="text-muted" style="font-size: 11px;">($${c.establishment_fee_remaining.toFixed(0)} remaining)</span>`
+      : '<span class="text-muted">-</span>';
+
+    tr.innerHTML = `
+      <td>
+        <strong>${escapeHtml(c.name)}</strong>
+        <div class="card-meta mt-1 text-muted">${escapeHtml(c.company)}</div>
+      </td>
+      <td><strong>$${c.monthly_fee.toFixed(0)}/mo</strong></td>
+      <td>
+        <div>Day ${c.billing_day}</div>
+        <div class="text-muted" style="font-size: 11px;">Due: ${c.due_date}</div>
+      </td>
+      <td><span class="badge ${statusBadgeClass}">${statusLabel}</span></td>
+      <td>${estText}</td>
+      <td class="text-right">
+        ${c.status === "paid"
+          ? `<button type="button" class="btn btn-secondary btn-sm" disabled style="opacity: 0.6;">Paid</button>`
+          : `<button type="button" class="btn btn-primary btn-sm btn-mark-monthly-paid" data-id="${c.client_id}">Mark paid</button>`
+        }
+        ${c.establishment_fee_remaining > 0
+          ? `<button type="button" class="btn btn-subtle btn-sm btn-mark-est-paid ml-1" data-id="${c.client_id}">Pay est. fee</button>`
+          : ""
+        }
+      </td>
+    `;
+
+    const btnMonthly = tr.querySelector(".btn-mark-monthly-paid");
+    if (btnMonthly) {
+      btnMonthly.addEventListener("click", () => handleMarkDuePaid(c.client_id, "monthly", selectedMonth));
+    }
+
+    const btnEst = tr.querySelector(".btn-mark-est-paid");
+    if (btnEst) {
+      btnEst.addEventListener("click", () => handleMarkDuePaid(c.client_id, "establishment", selectedMonth));
+    }
+
+    tbody.appendChild(tr);
+  });
+}
+
+async function handleMarkDuePaid(clientId, feeType, month) {
+  try {
+    const res = await fetch("/api/dues/mark-paid", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: clientId,
+        fee_type: feeType,
+        month: month,
+        creator_name: state.activeMemberName
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Failed to mark payment.");
+    }
+
+    await loadDuesView();
+    if (state.currentView === "money") {
+      await loadFinances();
+    }
+    await loadActivityFeed();
+  } catch (err) {
+    alert("Error: " + err.message);
+  }
+}
+
+// ==============================================================================
+// Stage 7: Tools Management
+// ==============================================================================
+async function loadToolsView() {
+  try {
+    const res = await fetch("/api/tools");
+    if (!res.ok) throw new Error("Failed to load software tools");
+    const tools = await res.json();
+    state.toolsData = tools;
+    renderToolsTable(tools);
+  } catch (err) {
+    console.error("Error loading tools:", err);
+  }
+}
+
+function renderToolsTable(tools) {
+  const tbody = document.getElementById("toolsTableBody");
+  if (!tbody) return;
+
+  if (!tools || tools.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="text-muted text-center py-4">No software tools recorded.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = "";
+  tools.forEach((t) => {
+    const tr = document.createElement("tr");
+
+    let statusBadge = "badge-status";
+    if (t.is_warning) {
+      statusBadge = "badge-warning";
+    }
+
+    tr.innerHTML = `
+      <td><strong>${escapeHtml(t.name)}</strong></td>
+      <td><strong>$${Number(t.monthly_cost).toFixed(0)}/mo</strong></td>
+      <td>${escapeHtml(t.renewal_date)}</td>
+      <td><span class="badge ${statusBadge}">${escapeHtml(t.renewal_status)}</span></td>
+      <td>${escapeHtml(t.owner_name || "Team")}</td>
+      <td><span class="text-muted">${escapeHtml(t.notes || "-")}</span></td>
+      <td class="text-right">
+        <button type="button" class="btn btn-secondary btn-sm btn-record-tool-payment" data-id="${t.id}" data-name="${escapeHtml(t.name)}">
+          Record payment
+        </button>
+      </td>
+    `;
+
+    const btnPay = tr.querySelector(".btn-record-tool-payment");
+    if (btnPay) {
+      btnPay.addEventListener("click", () => handleRecordToolPayment(t.id, t.name));
+    }
+
+    tbody.appendChild(tr);
+  });
+}
+
+async function handleRecordToolPayment(toolId, toolName) {
+  try {
+    const res = await fetch(`/api/tools/${toolId}/record-payment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ creator_name: state.activeMemberName })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Failed to record tool payment.");
+    }
+
+    await loadToolsView();
+    if (state.currentView === "money") {
+      await loadFinances();
+    }
+    await loadActivityFeed();
+  } catch (err) {
+    alert("Error: " + err.message);
+  }
+}
+
+async function handleSaveNewTool(e) {
+  e.preventDefault();
+  const nameInput = document.getElementById("toolFormName");
+  const costInput = document.getElementById("toolFormCost");
+  const renewalInput = document.getElementById("toolFormRenewal");
+  const ownerInput = document.getElementById("toolFormOwner");
+  const notesInput = document.getElementById("toolFormNotes");
+  const errorDiv = document.getElementById("toolFormError");
+
+  const name = nameInput.value.trim();
+  const monthly_cost = parseFloat(costInput.value) || 0;
+  const renewal_date = renewalInput.value.trim();
+  const owner_name = ownerInput.value.trim() || state.activeMemberName;
+  const notes = notesInput.value.trim();
+
+  if (!name || monthly_cost <= 0 || !renewal_date) {
+    errorDiv.textContent = "Please provide name, positive monthly cost, and renewal date.";
+    errorDiv.classList.remove("hidden");
+    return;
+  }
+
+  try {
+    errorDiv.classList.add("hidden");
+    const res = await fetch("/api/tools", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        monthly_cost,
+        renewal_date,
+        owner_name,
+        notes,
+        creator_name: state.activeMemberName
+      })
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || "Failed to create tool.");
+    }
+
+    document.getElementById("toolForm").reset();
+    document.getElementById("toolFormCard").classList.add("hidden");
+    await loadToolsView();
+  } catch (err) {
+    errorDiv.textContent = err.message;
+    errorDiv.classList.remove("hidden");
+  }
+}
+
+function setupStage7Handlers() {
+  // Dues month filter
+  const duesMonthSelect = document.getElementById("duesMonthSelect");
+  if (duesMonthSelect) {
+    duesMonthSelect.addEventListener("change", (e) => {
+      state.selectedDuesMonth = e.target.value;
+      loadDuesView();
+    });
+  }
+
+  // Tools form toggle & submission
+  const btnOpenAddTool = document.getElementById("btnOpenAddTool");
+  const toolFormCard = document.getElementById("toolFormCard");
+  const btnCancelTool = document.getElementById("btnCancelTool");
+  const toolForm = document.getElementById("toolForm");
+
+  if (btnOpenAddTool) {
+    btnOpenAddTool.addEventListener("click", () => {
+      toolFormCard.classList.remove("hidden");
+      document.getElementById("toolForm").reset();
+      const defaultDate = new Date();
+      defaultDate.setDate(defaultDate.getDate() + 30);
+      document.getElementById("toolFormRenewal").value = defaultDate.toISOString().slice(0, 10);
+      document.getElementById("toolFormName").focus();
+    });
+  }
+
+  if (btnCancelTool) {
+    btnCancelTool.addEventListener("click", () => {
+      toolFormCard.classList.add("hidden");
+      document.getElementById("toolFormError").classList.add("hidden");
+    });
+  }
+
+  if (toolForm) {
+    toolForm.addEventListener("submit", handleSaveNewTool);
+  }
+
+  // Assigned Tasks / Notifications modal toggle
+  const btnToggleNotifications = document.getElementById("btnToggleAssignedTasks");
+  const modal = document.getElementById("assignedTasksModal");
+  const btnCloseModal = document.getElementById("btnCloseAssignedTasks");
+
+  if (btnToggleNotifications && modal) {
+    btnToggleNotifications.addEventListener("click", () => {
+      renderAssignedTasksModal();
+      modal.classList.remove("hidden");
+    });
+  }
+
+  if (btnCloseModal && modal) {
+    btnCloseModal.addEventListener("click", () => {
+      modal.classList.add("hidden");
+    });
+  }
+
+  if (modal) {
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) {
+        modal.classList.add("hidden");
+      }
+    });
   }
 }
 
@@ -1843,12 +2397,15 @@ function initApp() {
   // 6. Stage 5 Finances handlers
   setupFinancesHandlers();
 
+  // 7. Stage 7 Dues, Tools & Notification handlers
+  setupStage7Handlers();
+
   const btnRefreshActivity = document.getElementById("btnRefreshActivity");
   if (btnRefreshActivity) {
     btnRefreshActivity.addEventListener("click", loadActivityFeed);
   }
 
-  // 7. Initial data load
+  // 8. Initial data load
   loadMembers();
   loadClients();
 }

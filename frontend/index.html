@@ -55,11 +55,17 @@
 
       <!-- Who are you? Member Selector -->
       <div class="user-selector-panel">
-        <label for="memberSelect" class="field-label">Who are you?</label>
+        <div class="user-selector-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+          <label for="memberSelect" class="field-label" style="margin-bottom: 0;">Who are you?</label>
+          <span id="memberHeaderBadge" class="badge-unread hidden" title="Unread assigned tasks">0</span>
+        </div>
         <select id="memberSelect" class="form-select">
           <option value="" disabled selected>Select your name</option>
         </select>
-        <button type="button" class="btn btn-subtle btn-sm mt-2" id="btnAddMemberToggle">+ Add member</button>
+        <div style="display: flex; gap: 8px; margin-top: 8px;">
+          <button type="button" class="btn btn-subtle btn-sm" id="btnAddMemberToggle">+ Add member</button>
+          <button type="button" class="btn btn-subtle btn-sm" id="btnToggleAssignedTasks">Assigned to you (<span id="assignedCount">0</span>)</button>
+        </div>
 
         <!-- Inline Add Member Form -->
         <div id="addMemberForm" class="add-member-form hidden">
@@ -78,14 +84,19 @@
         <a href="#inbox" class="nav-link active" data-view="inbox">Inbox</a>
         <a href="#board" class="nav-link" data-view="board">Board</a>
         <a href="#clients" class="nav-link" data-view="clients">Clients</a>
+        <a href="#dues" class="nav-link" data-view="dues">Dues</a>
+        <a href="#tools" class="nav-link" data-view="tools">Tools</a>
         <a href="#money" class="nav-link" data-view="money">Money</a>
         <a href="#activity" class="nav-link" data-view="activity">Activity</a>
       </nav>
 
       <div class="sidebar-footer">
-        <div class="active-member-display">
-          <span class="text-muted">Working as:</span>
-          <strong id="activeMemberName">Guest</strong>
+        <div class="active-member-display" style="display: flex; align-items: center; justify-content: space-between;">
+          <div>
+            <span class="text-muted">Working as:</span>
+            <strong id="activeMemberName">Guest</strong>
+          </div>
+          <span id="memberUnreadBadge" class="badge-unread hidden" title="Unread assigned tasks">0</span>
         </div>
       </div>
     </aside>
@@ -295,6 +306,21 @@
                     </div>
                   </div>
 
+                  <div class="form-row mt-3">
+                    <div class="form-group flex-1">
+                      <label for="clientFormBillingDay" class="field-label">Billing Day (1-31)</label>
+                      <input type="number" id="clientFormBillingDay" class="form-input" min="1" max="31" placeholder="1" value="1" />
+                    </div>
+                    <div class="form-group flex-1">
+                      <label for="clientFormEstablishmentTotal" class="field-label">Establishment Fee Total ($)</label>
+                      <input type="number" id="clientFormEstablishmentTotal" class="form-input" step="50" min="0" placeholder="0" value="0" />
+                    </div>
+                    <div class="form-group flex-1">
+                      <label for="clientFormEstablishmentPaid" class="field-label">Establishment Fee Paid ($)</label>
+                      <input type="number" id="clientFormEstablishmentPaid" class="form-input" step="50" min="0" placeholder="0" value="0" />
+                    </div>
+                  </div>
+
                   <div class="form-group mt-3">
                     <label for="clientFormNotes" class="field-label">Notes & WhatsApp Context</label>
                     <textarea id="clientFormNotes" class="form-textarea" rows="2" placeholder="Key contact person, WhatsApp group details, or specific scope..."></textarea>
@@ -382,6 +408,14 @@
                     <span class="spec-val" id="detailClientPlan">Standard</span>
                   </div>
                   <div class="spec-item">
+                    <span class="spec-label">Billing Day</span>
+                    <span class="spec-val" id="detailClientBillingDay">Day 1</span>
+                  </div>
+                  <div class="spec-item">
+                    <span class="spec-label">Establishment Balance</span>
+                    <span class="spec-val" id="detailClientEstablishment">$0 remaining</span>
+                  </div>
+                  <div class="spec-item">
                     <span class="spec-label">Contract End Date</span>
                     <span class="spec-val" id="detailClientEndDate">Not set</span>
                   </div>
@@ -421,9 +455,144 @@
         </section>
 
         <!-- ================================================================
+             VIEW: DUES (Stage 7)
+             ================================================================ -->
+        <section id="view-dues" class="view-pane">
+          <div class="sub-header-bar mb-3">
+            <div>
+              <h2 class="section-title">Client Dues & Retainers</h2>
+              <span class="section-tagline">Monthly retainer payment statuses and remaining establishment fee balances</span>
+            </div>
+            <div class="filter-controls">
+              <label for="duesMonthSelect" class="filter-label">Month:</label>
+              <select id="duesMonthSelect" class="form-select form-select-sm filter-select">
+                <option value="2026-10" selected>October 2026</option>
+                <option value="2026-09">September 2026</option>
+                <option value="2026-11">November 2026</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Total Pending Metric Cards -->
+          <div class="financial-metrics-grid mb-4">
+            <div class="panel metric-card">
+              <span class="metric-label">Total Monthly Dues Pending</span>
+              <strong class="metric-value metric-expense" id="duesTotalPending">$0.00</strong>
+              <span class="metric-sub" id="duesPendingCount">0 clients pending or overdue</span>
+            </div>
+            <div class="panel metric-card">
+              <span class="metric-label">Establishment Fees Outstanding</span>
+              <strong class="metric-value" id="duesTotalEstOutstanding" style="color: var(--text-main);">$0.00</strong>
+              <span class="metric-sub" id="duesEstCount">0 clients with remaining balance</span>
+            </div>
+          </div>
+
+          <!-- Dues Table -->
+          <div class="panel">
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Client</th>
+                    <th>Monthly Retainer</th>
+                    <th>Billing Day / Due Date</th>
+                    <th>Monthly Fee Status</th>
+                    <th>Establishment Balance</th>
+                    <th class="text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="duesTableBody">
+                  <tr><td colspan="6" class="text-muted text-center py-4">Loading client dues...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             VIEW: TOOLS (Stage 7)
+             ================================================================ -->
+        <section id="view-tools" class="view-pane">
+          <div class="sub-header-bar mb-3">
+            <div>
+              <h2 class="section-title">Software Tools & Subscriptions</h2>
+              <span class="section-tagline">Track monthly tool costs, renewal dates, owners, and log subscription expenses</span>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" id="btnOpenAddTool">+ Add tool</button>
+          </div>
+
+          <!-- Inline Add Tool Card (Hidden by default) -->
+          <div id="toolFormCard" class="panel mb-4 hidden">
+            <div class="panel-header">
+              <h3 class="panel-title">Add Software Tool</h3>
+            </div>
+            <div class="panel-body">
+              <form id="toolForm">
+                <div class="form-row">
+                  <div class="form-group flex-1">
+                    <label for="toolFormName" class="field-label">Tool Name *</label>
+                    <input type="text" id="toolFormName" class="form-input" placeholder="e.g. Figma, GitHub Copilot, OpenAI" required />
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="toolFormCost" class="field-label">Monthly Cost ($) *</label>
+                    <input type="number" id="toolFormCost" class="form-input" step="1" min="1" placeholder="20" required />
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="toolFormRenewal" class="field-label">Next Renewal Date *</label>
+                    <input type="date" id="toolFormRenewal" class="form-input" required />
+                  </div>
+                </div>
+                <div class="form-row mt-3">
+                  <div class="form-group flex-1">
+                    <label for="toolFormOwner" class="field-label">Owner / Lead</label>
+                    <input type="text" id="toolFormOwner" class="form-input" placeholder="e.g. Riya" />
+                  </div>
+                  <div class="form-group flex-2">
+                    <label for="toolFormNotes" class="field-label">Notes & Purpose</label>
+                    <input type="text" id="toolFormNotes" class="form-input" placeholder="e.g. Team design license, shared api key" />
+                  </div>
+                </div>
+                <div class="form-actions mt-3">
+                  <button type="submit" class="btn btn-primary btn-sm">Save tool</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btnCancelTool">Cancel</button>
+                </div>
+                <div id="toolFormError" class="form-error mt-2 hidden"></div>
+              </form>
+            </div>
+          </div>
+
+          <!-- Tools Table -->
+          <div class="panel">
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Tool Name</th>
+                    <th>Monthly Cost</th>
+                    <th>Renewal Date</th>
+                    <th>Status</th>
+                    <th>Owner</th>
+                    <th>Notes</th>
+                    <th class="text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="toolsTableBody">
+                  <tr><td colspan="7" class="text-muted text-center py-4">Loading tools...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
              VIEW: MONEY (Stage 5)
              ================================================================ -->
         <section id="view-money" class="view-pane">
+          <!-- Summary Strip (Stage 7): Pending Dues and Tools Renewing in 7 Days -->
+          <div id="moneySummaryStrip" class="summary-strip panel mb-4 hidden">
+            <!-- Dynamically populated -->
+          </div>
+
           <!-- Month Filter & Quick Action Bar -->
           <div class="sub-header-bar mb-3">
             <div>
@@ -639,6 +808,22 @@
         </section>
       </div>
     </main>
+  <!-- Assigned Tasks / Notifications Modal (Stage 7) -->
+  <div id="assignedTasksModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <h3 class="modal-title">Assigned to You</h3>
+          <span class="modal-subtitle" id="assignedTasksMemberSubtitle">Tasks assigned to active member</span>
+        </div>
+        <button type="button" class="modal-close-btn" id="btnCloseAssignedTasks">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="assignedTasksList" class="assigned-tasks-list">
+          <!-- Dynamically populated -->
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="/app.js"></script>
