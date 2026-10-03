@@ -4,6 +4,7 @@
 # SQLite database
 *.db
 *.sqlite3
+data/
 
 # Python virtual environment & cache
 venv/

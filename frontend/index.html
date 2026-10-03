@@ -7,7 +7,37 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div class="app-layout">
+  <!-- Passcode Access Gate (Locks entire workspace until passcode is verified) -->
+  <div id="accessGateOverlay" class="access-gate-overlay">
+    <div class="access-gate-card">
+      <div class="access-gate-brand">
+        <h1 class="access-gate-title">Newvora HQ</h1>
+        <div class="access-gate-subtitle">Internal Operations &amp; Client Workspace</div>
+      </div>
+      <p class="access-gate-description">
+        This internal workspace is protected. Please enter the team access passcode to continue.
+      </p>
+      <form id="accessGateForm" class="access-gate-form">
+        <div class="form-group">
+          <label for="accessCodeInput" class="field-label">Access Passcode</label>
+          <input
+            type="password"
+            id="accessCodeInput"
+            class="form-input"
+            placeholder="Enter passcode"
+            autocomplete="current-password"
+            required
+          />
+        </div>
+        <div id="accessGateError" class="form-error mt-2 hidden"></div>
+        <button type="submit" class="btn btn-primary mt-3" id="btnUnlockApp" style="width: 100%;">
+          Unlock Workspace
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div class="app-layout hidden" id="appLayout">
     <!-- Mobile Header -->
     <header class="mobile-bar">
       <div class="brand-title">Newvora HQ</div>

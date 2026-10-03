@@ -2,7 +2,7 @@ import os
 import uvicorn
 from typing import Optional, List
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -14,6 +14,7 @@ from backend.ai import parse_whatsapp_message, normalize_request_type, normalize
 load_dotenv()
 
 PORT = int(os.getenv("PORT", "8000"))
+ACCESS_CODE = os.getenv("ACCESS_CODE", "newvora2026").strip()
 
 
 @asynccontextmanager
@@ -125,6 +126,53 @@ class WeeklyUpdateRequest(BaseModel):
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "app": "Newvora HQ"}
+
+
+# ------------------------------------------------------------------------------
+# Authentication / Access Code (Stage 7 / Security Gate)
+# ------------------------------------------------------------------------------
+
+class AuthVerifyRequest(BaseModel):
+    access_code: str
+
+
+@app.get("/api/auth/status")
+def auth_status():
+    expected = os.getenv("ACCESS_CODE", "newvora2026").strip()
+    return {"required": bool(expected)}
+
+
+@app.post("/api/auth/verify")
+def auth_verify(payload: AuthVerifyRequest):
+    expected = os.getenv("ACCESS_CODE", "newvora2026").strip()
+    if not expected:
+        return {"valid": True, "required": False}
+    if payload.access_code.strip() == expected:
+        return {"valid": True, "required": True}
+    raise HTTPException(status_code=401, detail="Invalid access passcode.")
+
+
+def verify_access_code(
+    x_access_code: Optional[str] = Header(None, alias="X-Access-Code"),
+    authorization: Optional[str] = Header(None),
+):
+    expected = os.getenv("ACCESS_CODE", "newvora2026").strip()
+    if not expected:
+        return True
+
+    token = (x_access_code or "").strip()
+    if not token and authorization:
+        if authorization.lower().startswith("bearer "):
+            token = authorization[7:].strip()
+        else:
+            token = authorization.strip()
+
+    if not token or token != expected:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing access passcode. Please provide a valid X-Access-Code header."
+        )
+    return True
 
 
 # ------------------------------------------------------------------------------
@@ -702,7 +750,7 @@ def delete_expense(expense_id: int):
 # Stage 6: AI Weekly Client Update Generator
 # ------------------------------------------------------------------------------
 
-@app.post("/api/ai/weekly-update")
+@app.post("/api/ai/weekly-update", dependencies=[Depends(verify_access_code)])
 async def generate_weekly_update(payload: WeeklyUpdateRequest):
     conn = get_db_connection()
     try:
@@ -758,7 +806,7 @@ async def generate_weekly_update(payload: WeeklyUpdateRequest):
 # AI Message Intake (Stage 2)
 # ------------------------------------------------------------------------------
 
-@app.post("/api/ai/parse-message")
+@app.post("/api/ai/parse-message", dependencies=[Depends(verify_access_code)])
 async def parse_message(payload: ParseMessageRequest):
     message = (payload.message or "").strip()
     image_base64 = (payload.image_base64 or "").strip()

@@ -1,21 +1,26 @@
-# Render Blueprint for FREE Web Service Plan
-# Ephemeral local storage: SQLite database resets on restart and auto-seeds sample data.
+# This configuration is for permanent hosting on a paid Render account.
+# It uses the Starter plan with a persistent 1 GB disk mounted at /data,
+# ensuring the SQLite database persists across deployments and container restarts.
 services:
   - type: web
     name: newvora-hq
     env: python
-    plan: free
+    plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    disk:
+      name: newvora-data
+      mountPath: /data
+      sizeGB: 1
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.8
       - key: AI_PROVIDER
         value: gemini
       - key: AI_MODEL
-        value: gemma-4-26b-a4b-it
+        sync: false
       - key: DB_PATH
-        value: ./data/newvora.db
+        value: /data/newvora.db
       - key: RELOAD
         value: "false"
       - key: GOOGLE_API_KEY

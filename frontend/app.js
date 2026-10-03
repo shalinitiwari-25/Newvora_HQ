@@ -38,7 +38,8 @@ const state = {
   selectedClientId: null,
   boardFilterClient: "all",
   boardFilterAssignee: "all",
-  selectedFinanceMonth: "2026-10"
+  selectedFinanceMonth: "2026-10",
+  appInitialized: false
 };
 
 // ==============================================================================
@@ -487,9 +488,18 @@ async function handleGenerateWeeklyUpdate() {
   try {
     const res = await fetch("/api/ai/weekly-update", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Access-Code": getStoredAccessCode()
+      },
       body: JSON.stringify({ client_id: state.selectedClientId })
     });
+
+    if (res.status === 401) {
+      showAccessGate("Access passcode required or invalid. Please unlock workspace.");
+      card.classList.add("hidden");
+      return;
+    }
 
     const data = await res.json();
     if (!res.ok) throw new Error(data.detail || "Failed to generate update.");
@@ -1427,7 +1437,10 @@ async function handleProcessInboxMessage(e) {
   try {
     const res = await fetch("/api/ai/parse-message", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Access-Code": getStoredAccessCode()
+      },
       body: JSON.stringify({
         client_id: clientId,
         message: message,
@@ -1435,6 +1448,11 @@ async function handleProcessInboxMessage(e) {
         image_mime_type: imageMimeType
       })
     });
+
+    if (res.status === 401) {
+      showAccessGate("Access passcode required or invalid. Please unlock workspace.");
+      throw new Error("Access passcode required or invalid.");
+    }
 
     const data = await res.json();
     if (!res.ok) {
@@ -1645,9 +1663,122 @@ function setupSamplePrompts() {
 }
 
 // ==============================================================================
-// Initial Setup & Event Listeners
+// Authentication & Shared Access Gate (Stage 7)
 // ==============================================================================
-document.addEventListener("DOMContentLoaded", () => {
+
+function getStoredAccessCode() {
+  return (localStorage.getItem("newvora_access_code") || "").trim();
+}
+
+function setStoredAccessCode(code) {
+  if (code && code.trim()) {
+    localStorage.setItem("newvora_access_code", code.trim());
+  } else {
+    localStorage.removeItem("newvora_access_code");
+  }
+}
+
+function showAccessGate(errorMessage = "") {
+  const gate = document.getElementById("accessGateOverlay");
+  const app = document.getElementById("appLayout");
+  const errEl = document.getElementById("accessGateError");
+  const input = document.getElementById("accessCodeInput");
+
+  if (app) app.classList.add("hidden");
+  if (gate) gate.classList.remove("hidden");
+  if (errEl) {
+    if (errorMessage) {
+      errEl.textContent = errorMessage;
+      errEl.classList.remove("hidden");
+    } else {
+      errEl.classList.add("hidden");
+    }
+  }
+  if (input) {
+    input.value = "";
+    setTimeout(() => input.focus(), 50);
+  }
+}
+
+function hideAccessGate() {
+  const gate = document.getElementById("accessGateOverlay");
+  const app = document.getElementById("appLayout");
+  if (gate) gate.classList.add("hidden");
+  if (app) app.classList.remove("hidden");
+}
+
+async function handleAccessGateSubmit(e) {
+  e.preventDefault();
+  const input = document.getElementById("accessCodeInput");
+  const errEl = document.getElementById("accessGateError");
+  const btn = document.getElementById("btnUnlockApp");
+  const code = (input.value || "").trim();
+
+  if (!code) {
+    errEl.textContent = "Please enter the access passcode.";
+    errEl.classList.remove("hidden");
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Verifying...";
+  errEl.classList.add("hidden");
+
+  try {
+    const res = await fetch("/api/auth/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_code: code })
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || "Invalid access passcode.");
+    }
+
+    setStoredAccessCode(code);
+    hideAccessGate();
+    initApp();
+  } catch (err) {
+    errEl.textContent = err.message;
+    errEl.classList.remove("hidden");
+    input.select();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Unlock Workspace";
+  }
+}
+
+async function checkAccessAndInit() {
+  const savedCode = getStoredAccessCode();
+  if (!savedCode) {
+    showAccessGate();
+    return;
+  }
+
+  try {
+    const res = await fetch("/api/auth/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ access_code: savedCode })
+    });
+
+    if (res.ok) {
+      hideAccessGate();
+      initApp();
+    } else {
+      setStoredAccessCode("");
+      showAccessGate("Access session expired. Please enter the team passcode.");
+    }
+  } catch (err) {
+    showAccessGate("Could not connect to server. Please try again.");
+  }
+}
+
+function initApp() {
+  if (state.appInitialized) return;
+  state.appInitialized = true;
+
   // 1. Navigation event delegation
   document.querySelectorAll(".nav-link").forEach((link) => {
     link.addEventListener("click", (e) => {
@@ -1720,4 +1851,15 @@ document.addEventListener("DOMContentLoaded", () => {
   // 7. Initial data load
   loadMembers();
   loadClients();
+}
+
+// ==============================================================================
+// Initial Setup & Event Listeners
+// ==============================================================================
+document.addEventListener("DOMContentLoaded", () => {
+  const accessGateForm = document.getElementById("accessGateForm");
+  if (accessGateForm) {
+    accessGateForm.addEventListener("submit", handleAccessGateSubmit);
+  }
+  checkAccessAndInit();
 });

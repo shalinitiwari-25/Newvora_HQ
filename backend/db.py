@@ -5,17 +5,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DB_PATH = os.getenv("DB_PATH", "newvora.db")
+DEFAULT_DB_PATH = os.path.join(".", "data", "newvora.db")
+DB_PATH = os.getenv("DB_PATH", DEFAULT_DB_PATH)
 
 
 def get_db_path() -> str:
-    """Return the database file path from environment or default."""
-    return os.getenv("DB_PATH", "newvora.db")
+    """Return the database file path from environment or default local path."""
+    raw = os.getenv("DB_PATH", DEFAULT_DB_PATH)
+    return raw.strip() if raw and raw.strip() else DEFAULT_DB_PATH
 
 
 def get_db_connection() -> sqlite3.Connection:
     """Create and return a SQLite database connection with row factory enabled."""
-    conn = sqlite3.connect(get_db_path())
+    db_path = get_db_path()
+    db_dir = os.path.dirname(os.path.abspath(db_path))
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
+    conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
@@ -121,11 +127,17 @@ def init_db() -> None:
 
 
 def seed_db(conn: sqlite3.Connection) -> None:
-    """Seed sample data if the members table is empty."""
+    """Seed sample data whenever the database is empty at startup, so the demo is never blank."""
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM members;")
-    count = cursor.fetchone()[0]
-    if count > 0:
+    members_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM clients;")
+    clients_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM tasks;")
+    tasks_count = cursor.fetchone()[0]
+
+    # Skip seeding if core tables already have data
+    if members_count > 0 and clients_count > 0 and tasks_count > 0:
         return
 
     with conn:
@@ -135,7 +147,7 @@ def seed_db(conn: sqlite3.Connection) -> None:
             ("Rohan", "Client Outreach & Accounts"),
             ("Anya", "Social Media & Marketing"),
         ]
-        cursor.executemany("INSERT INTO members (name, role) VALUES (?, ?);", members_data)
+        cursor.executemany("INSERT OR IGNORE INTO members (name, role) VALUES (?, ?);", members_data)
 
         # Seed 3 Clients
         clients_data = [

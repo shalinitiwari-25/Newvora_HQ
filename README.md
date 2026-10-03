@@ -34,9 +34,10 @@ cp .env.example .env
 Configuration options in `.env`:
 - `GOOGLE_API_KEY`: Google AI Studio API key for Gemma.
 - `AI_PROVIDER`: `gemini`.
-- `AI_MODEL`: `gemma-2-9b-it` (default).
+- `AI_MODEL`: `gemma-4-26b-a4b-it` (default).
 - `PORT`: Server port (default `8000`).
-- `DB_PATH`: SQLite database file path (default `newvora.db`).
+- `DB_PATH`: SQLite database file path (default `./data/newvora.db`, auto-created if missing).
+- `ACCESS_CODE`: Team shared access passcode to protect the workspace and AI endpoints (default `newvora2026`).
 
 ### 4. Run the Server
 
@@ -52,6 +53,31 @@ Open your browser at:
 ```
 http://localhost:8000
 ```
+
+---
+
+## Deploying
+
+### Option A: Render Free Web Service Plan
+Ideal for fast demos and team testing at zero cost.
+1. Push your repository to GitHub.
+2. In [Render Dashboard](https://dashboard.render.com), create a new **Web Service** connected to your repo (or use the blueprint `render.yaml`).
+3. Build Command: `pip install -r requirements.txt`
+4. Start Command: `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
+5. Set Environment Variables:
+   - `GOOGLE_API_KEY`: Your Google Gemini API key.
+   - `ACCESS_CODE`: Secret passcode your team enters to unlock the app.
+   - `AI_PROVIDER`: `gemini`
+   - `AI_MODEL`: `gemma-4-26b-a4b-it`
+   - `DB_PATH`: `./data/newvora.db`
+6. **Automatic Seeding**: Because the free filesystem is ephemeral and resets on restart, the app automatically seeds the sample demo data (members, clients, tasks, finances) whenever the database is empty at startup so the demo is never blank.
+
+### Option B: Render Paid Plan (Persistent Storage)
+For permanent production hosting without data resets.
+1. Use the included blueprint `render.paid.yaml`.
+2. Uses the **Starter** plan with a 1 GB persistent disk mounted at `/data`.
+3. Sets `DB_PATH=/data/newvora.db` so the SQLite database permanently persists across redeploys and restarts.
+4. Set `GOOGLE_API_KEY`, `ACCESS_CODE`, and `AI_MODEL` in the Render environment settings.
 
 ---
 
