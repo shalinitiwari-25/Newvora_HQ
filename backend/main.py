@@ -1,7 +1,9 @@
 import os
 import uvicorn
 import datetime
-from typing import Optional, List
+import calendar
+import json
+from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,7 +12,14 @@ from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 from backend.db import init_db, get_db_connection
-from backend.ai import parse_whatsapp_message, normalize_request_type, normalize_priority, call_ai
+from backend.ai import (
+    parse_whatsapp_message,
+    normalize_request_type,
+    normalize_priority,
+    call_ai,
+    parse_tool_receipt,
+    generate_monthly_report_summary
+)
 
 load_dotenv()
 
@@ -74,11 +83,63 @@ class ClientUpdate(BaseModel):
 
 class ToolCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=100)
-    monthly_cost: float = Field(..., gt=0.0)
+    plan_name: Optional[str] = "Standard"
+    budget_amount: float = Field(0.0, ge=0.0)
+    unit: Optional[str] = "USD"
+    monthly_cost: float = Field(0.0, ge=0.0)
     renewal_date: str = Field(..., min_length=10, max_length=10)
     owner_name: Optional[str] = "Team"
     notes: Optional[str] = ""
     creator_name: Optional[str] = "Team"
+
+
+class ClientPaymentRecord(BaseModel):
+    client_id: int
+    month: str = Field(..., min_length=4)
+    amount_expected: float = Field(..., ge=0.0)
+    amount_received: float = Field(0.0, ge=0.0)
+    date_received: Optional[str] = None
+    method: Optional[str] = ""
+    note: Optional[str] = ""
+    creator_name: Optional[str] = "Team"
+
+
+class ToolUsageCreate(BaseModel):
+    tool_id: int
+    date: str = Field(..., min_length=10, max_length=10)
+    amount_used: float = Field(..., ge=0.0)
+    note: Optional[str] = ""
+    creator_name: Optional[str] = "Team"
+
+
+class ToolUsageSetTotal(BaseModel):
+    tool_id: int
+    month: Optional[str] = ""
+    total_amount_used: float = Field(..., ge=0.0)
+    note: Optional[str] = ""
+    creator_name: Optional[str] = "Team"
+
+
+class ReceiptParseRequest(BaseModel):
+    receipt_text: str = Field(..., min_length=1)
+
+
+class ToolSaveFromReceipt(BaseModel):
+    name: str
+    plan_name: Optional[str] = ""
+    budget_amount: Optional[float] = 0.0
+    unit: Optional[str] = "USD"
+    monthly_cost: Optional[float] = 0.0
+    renewal_date: Optional[str] = ""
+    owner_name: Optional[str] = "Team"
+    notes: Optional[str] = ""
+    record_expense: bool = False
+    creator_name: Optional[str] = "Team"
+
+
+class ReportSummaryRequest(BaseModel):
+    month: str
+    metrics: dict
 
 
 class MarkPaidRequest(BaseModel):
@@ -433,6 +494,10 @@ def create_task(payload: TaskCreate):
                 INSERT INTO task_notifications (member_id, task_id, is_read)
                 VALUES (?, ?, 0);
             """, (payload.assigned_member_id, task_id))
+            cursor.execute("""
+                INSERT INTO notifications (member_id, type, text, link_type, link_id, is_read)
+                VALUES (?, 'assignment', ?, 'task', ?, 0);
+            """, (payload.assigned_member_id, f"Assigned to you: '{title}' ({client_name})", task_id))
 
         creator = (payload.creator_name or "Team").strip()
         cursor.execute(
@@ -484,6 +549,16 @@ def update_task_status(task_id: int, payload: TaskStatusUpdate):
             "INSERT INTO activity_log (member_name, action, details) VALUES (?, ?, ?);",
             (updater, "Changed Task Status", f"Moved '{task['title']}' from {old_status} to {status}.")
         )
+
+        # Part 4: Notify every other member when task changes status
+        cursor.execute("SELECT id, name FROM members;")
+        for m in cursor.fetchall():
+            if m["name"].strip().lower() != updater.lower():
+                cursor.execute("""
+                    INSERT INTO notifications (member_id, type, text, link_type, link_id, is_read)
+                    VALUES (?, 'status_change', ?, 'task', ?, 0);
+                """, (m["id"], f"{updater} moved '{task['title']}' to {status}", task_id))
+
         conn.commit()
 
         updated = conn.execute("""
@@ -526,6 +601,10 @@ def assign_task(task_id: int, payload: TaskAssignUpdate):
                 INSERT INTO task_notifications (member_id, task_id, is_read)
                 VALUES (?, ?, 0);
             """, (payload.assigned_member_id, task_id))
+            cursor.execute("""
+                INSERT INTO notifications (member_id, type, text, link_type, link_id, is_read)
+                VALUES (?, 'assignment', ?, 'task', ?, 0);
+            """, (payload.assigned_member_id, f"Assigned to you: '{task['title']}'", task_id))
 
         updater = (payload.updater_name or "Team").strip()
         cursor.execute(
@@ -590,12 +669,72 @@ def add_task_comment(task_id: int, payload: CommentCreate):
             "INSERT INTO activity_log (member_name, action, details) VALUES (?, ?, ?);",
             (author, "Added Comment", f"Commented on '{task['title']}': \"{snippet}\"")
         )
+
+        # Part 4: Notify every other member when a comment is added
+        cursor.execute("SELECT id, name FROM members;")
+        for m in cursor.fetchall():
+            if m["name"].strip().lower() != author.lower():
+                cursor.execute("""
+                    INSERT INTO notifications (member_id, type, text, link_type, link_id, is_read)
+                    VALUES (?, 'comment', ?, 'task', ?, 0);
+                """, (m["id"], f"{author} commented on '{task['title']}': \"{snippet}\"", task_id))
+
         conn.commit()
 
         created = conn.execute("SELECT * FROM task_comments WHERE id = ?;", (comment_id,)).fetchone()
         return dict(created)
     finally:
         conn.close()
+
+
+# ------------------------------------------------------------------------------
+# Stage 8: Month-end Reminder Helper
+# ------------------------------------------------------------------------------
+
+def compute_month_end_reminder(conn) -> dict:
+    today = datetime.date.today()
+    _, days_in_month = calendar.monthrange(today.year, today.month)
+    is_last_5_days = today.day >= (days_in_month - 4)
+    cur_month_str = today.strftime("%Y-%m")
+
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name, billing_day, monthly_fee FROM clients ORDER BY name ASC;")
+    clients = cursor.fetchall()
+
+    cursor.execute("SELECT client_id, amount_expected, amount_received FROM client_payments WHERE month = ?;", (cur_month_str,))
+    payment_map = {r["client_id"]: r for r in cursor.fetchall()}
+
+    has_overdue = False
+    clients_with_balance = []
+
+    for c in clients:
+        cid = c["id"]
+        cname = c["name"]
+        fee = float(c["monthly_fee"] or 0.0)
+        pay = payment_map.get(cid)
+        exp = float(pay["amount_expected"]) if pay else fee
+        rec = float(pay["amount_received"]) if pay else 0.0
+        bal = max(0.0, exp - rec)
+
+        b_day = int(c["billing_day"] or 1)
+        safe_day = min(b_day, days_in_month)
+        due_date = datetime.date(today.year, today.month, safe_day)
+
+        if bal > 0:
+            clients_with_balance.append(cname)
+            if today > due_date:
+                has_overdue = True
+
+    should_show = (is_last_5_days or has_overdue) and len(clients_with_balance) > 0
+    message = f"Month end is near, collect from: {', '.join(clients_with_balance)}" if should_show else ""
+
+    return {
+        "show_banner": should_show,
+        "banner_message": message,
+        "clients_with_balance": clients_with_balance,
+        "is_last_5_days": is_last_5_days,
+        "has_overdue": has_overdue
+    }
 
 
 # ------------------------------------------------------------------------------
@@ -740,7 +879,8 @@ def get_finances(month: Optional[str] = None):
             "income_items": income_items,
             "expense_items": expense_items,
             "expenses_by_tool": expenses_by_tool,
-            "summary_strip": summary_strip
+            "summary_strip": summary_strip,
+            "month_end_reminder": compute_month_end_reminder(conn)
         }
     finally:
         conn.close()
@@ -969,46 +1109,80 @@ def get_dues(month: Optional[str] = None):
             month_num = today.month
             target_month = f"{year:04d}-{month_num:02d}"
 
+        # Fetch available distinct months across client_payments and income
+        cursor.execute("SELECT DISTINCT month FROM client_payments UNION SELECT DISTINCT month FROM income ORDER BY month DESC;")
+        available_months = [r[0] for r in cursor.fetchall() if r[0]]
+        if target_month not in available_months:
+            available_months.insert(0, target_month)
+        if current_month_str not in available_months:
+            available_months.append(current_month_str)
+        available_months = sorted(list(set(available_months)), reverse=True)
+
         # Fetch clients
         cursor.execute("SELECT * FROM clients ORDER BY name ASC;")
         clients = [dict(c) for c in cursor.fetchall()]
 
-        # Fetch income for target_month
-        cursor.execute("SELECT * FROM income WHERE month = ?;", (target_month,))
-        income_rows = [dict(r) for r in cursor.fetchall()]
+        # Fetch payments for target_month
+        cursor.execute("SELECT * FROM client_payments WHERE month = ?;", (target_month,))
+        payments_by_client = {r["client_id"]: dict(r) for r in cursor.fetchall()}
 
-        client_paid_map = {}
-        for inc in income_rows:
-            cid = inc["client_id"]
-            client_paid_map[cid] = client_paid_map.get(cid, 0.0) + float(inc["amount"])
+        # Fetch all past payments for history
+        cursor.execute("SELECT * FROM client_payments ORDER BY month DESC, created_at DESC;")
+        all_payments = [dict(r) for r in cursor.fetchall()]
+        history_by_client = {}
+        for p in all_payments:
+            cid = p["client_id"]
+            if cid not in history_by_client:
+                history_by_client[cid] = []
+            history_by_client[cid].append(p)
+
+        _, max_days = calendar.monthrange(year, month_num)
 
         total_pending = 0.0
+        total_expected = 0.0
+        total_received = 0.0
         items = []
-
-        max_days = 28 if month_num == 2 else (30 if month_num in (4, 6, 9, 11) else 31)
 
         for client in clients:
             cid = client["id"]
             monthly_fee = float(client["monthly_fee"] or 0.0)
-            est_total = float(client["establishment_fee_total"] or 0.0)
-            est_paid = float(client["establishment_fee_paid"] or 0.0)
-            est_remaining = max(0.0, est_total - est_paid)
             b_day = int(client["billing_day"] or 1)
-
             safe_day = min(b_day, max_days)
             due_date = datetime.date(year, month_num, safe_day)
 
-            paid_amt = client_paid_map.get(cid, 0.0)
-            is_paid = paid_amt >= monthly_fee if monthly_fee > 0 else True
+            payment = payments_by_client.get(cid)
+            if payment:
+                amt_expected = float(payment["amount_expected"])
+                amt_received = float(payment["amount_received"])
+                date_received = payment.get("date_received")
+                method = payment.get("method") or ""
+                note = payment.get("note") or ""
+                payment_id = payment.get("id")
+            else:
+                amt_expected = monthly_fee
+                amt_received = 0.0
+                date_received = None
+                method = ""
+                note = ""
+                payment_id = None
 
-            if is_paid:
+            balance = max(0.0, amt_expected - amt_received)
+            total_expected += amt_expected
+            total_received += amt_received
+            total_pending += balance
+
+            if amt_received >= amt_expected and amt_expected > 0:
                 status = "paid"
+            elif amt_received > 0:
+                status = "partial"
             elif today > due_date:
                 status = "overdue"
-                total_pending += monthly_fee
             else:
                 status = "pending"
-                total_pending += monthly_fee
+
+            est_total = float(client["establishment_fee_total"] or 0.0)
+            est_paid = float(client["establishment_fee_paid"] or 0.0)
+            est_remaining = max(0.0, est_total - est_paid)
 
             items.append({
                 "client_id": cid,
@@ -1019,16 +1193,29 @@ def get_dues(month: Optional[str] = None):
                 "billing_day": b_day,
                 "due_date": due_date.isoformat(),
                 "status": status,
-                "paid_amount": paid_amt,
+                "payment_id": payment_id,
+                "amount_expected": amt_expected,
+                "amount_received": amt_received,
+                "balance": balance,
+                "date_received": date_received,
+                "method": method,
+                "note": note,
                 "establishment_fee_total": est_total,
                 "establishment_fee_paid": est_paid,
-                "establishment_fee_remaining": est_remaining
+                "establishment_fee_remaining": est_remaining,
+                "history": history_by_client.get(cid, [])
             })
+
+        reminder = compute_month_end_reminder(conn)
 
         return {
             "month": target_month,
+            "available_months": available_months,
+            "total_expected": total_expected,
+            "total_received": total_received,
             "total_pending": total_pending,
-            "clients": items
+            "clients": items,
+            "reminder": reminder
         }
     finally:
         conn.close()
@@ -1071,6 +1258,20 @@ def mark_due_paid(payload: MarkPaidRequest):
                 INSERT INTO income (client_id, amount, month, notes)
                 VALUES (?, ?, ?, ?);
             """, (payload.client_id, amount, payload.month, f"Monthly retainer fee for {client['name']} ({payload.month})"))
+            
+            # Sync into client_payments
+            cursor.execute("SELECT id FROM client_payments WHERE client_id = ? AND month = ?;", (payload.client_id, payload.month))
+            cp_exist = cursor.fetchone()
+            if cp_exist:
+                cursor.execute("""
+                    UPDATE client_payments SET amount_received = ?, date_received = ?, method = 'Direct' WHERE id = ?;
+                """, (amount, datetime.date.today().isoformat(), cp_exist["id"]))
+            else:
+                cursor.execute("""
+                    INSERT INTO client_payments (client_id, month, amount_expected, amount_received, date_received, method, note)
+                    VALUES (?, ?, ?, ?, ?, 'Direct', 'Retainer fee');
+                """, (payload.client_id, payload.month, float(client["monthly_fee"]), amount, datetime.date.today().isoformat()))
+
             cursor.execute(
                 "INSERT INTO activity_log (member_name, action, details) VALUES (?, ?, ?);",
                 (creator, "Marked Dues Paid", f"Marked monthly retainer of ${amount:.0f} for '{client['name']}' as paid for {payload.month}.")
@@ -1078,6 +1279,76 @@ def mark_due_paid(payload: MarkPaidRequest):
 
         conn.commit()
         return {"success": True, "client_id": payload.client_id, "amount": amount, "month": payload.month}
+    finally:
+        conn.close()
+
+
+@app.post("/api/client-payments", dependencies=[Depends(verify_access_code)])
+def record_client_payment(payload: ClientPaymentRecord):
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name FROM clients WHERE id = ?;", (payload.client_id,))
+        client = cursor.fetchone()
+        if not client:
+            raise HTTPException(status_code=404, detail="Client not found.")
+        client_name = client["name"]
+
+        creator = (payload.creator_name or "Team").strip()
+        month = payload.month.strip()
+        exp = float(payload.amount_expected)
+        rec = float(payload.amount_received)
+        dt = (payload.date_received or "").strip() or None
+        if rec > 0 and not dt:
+            dt = datetime.date.today().isoformat()
+        method = (payload.method or "").strip()
+        note = (payload.note or "").strip()
+
+        cursor.execute("SELECT id FROM client_payments WHERE client_id = ? AND month = ?;", (payload.client_id, month))
+        existing = cursor.fetchone()
+        if existing:
+            cursor.execute("""
+                UPDATE client_payments
+                SET amount_expected = ?, amount_received = ?, date_received = ?, method = ?, note = ?
+                WHERE id = ?;
+            """, (exp, rec, dt, method, note, existing["id"]))
+            payment_id = existing["id"]
+            action = "Updated Client Payment"
+        else:
+            cursor.execute("""
+                INSERT INTO client_payments (client_id, month, amount_expected, amount_received, date_received, method, note)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
+            """, (payload.client_id, month, exp, rec, dt, method, note))
+            payment_id = cursor.lastrowid
+            action = "Recorded Client Payment"
+
+        # Sync to income table if amount_received > 0
+        if rec > 0:
+            cursor.execute("SELECT id FROM income WHERE client_id = ? AND month = ? AND notes LIKE '%retainer%';", (payload.client_id, month))
+            inc = cursor.fetchone()
+            if inc:
+                cursor.execute("UPDATE income SET amount = ? WHERE id = ?;", (rec, inc["id"]))
+            else:
+                cursor.execute("""
+                    INSERT INTO income (client_id, amount, month, notes)
+                    VALUES (?, ?, ?, ?);
+                """, (payload.client_id, rec, month, f"Monthly retainer fee for {client_name} ({month})"))
+
+        cursor.execute(
+            "INSERT INTO activity_log (member_name, action, details) VALUES (?, ?, ?);",
+            (creator, action, f"Logged ${rec:.0f} received (${exp:.0f} expected) from {client_name} for {month}.")
+        )
+        conn.commit()
+
+        return {
+            "success": True,
+            "id": payment_id,
+            "client_id": payload.client_id,
+            "month": month,
+            "amount_expected": exp,
+            "amount_received": rec,
+            "balance": max(0.0, exp - rec)
+        }
     finally:
         conn.close()
 
@@ -1090,14 +1361,33 @@ def get_tools():
         cursor.execute("SELECT * FROM tools ORDER BY renewal_date ASC;")
         rows = cursor.fetchall()
         today = datetime.date.today()
+        current_month_str = today.strftime("%Y-%m")
         tools = []
+
         for r in rows:
             item = dict(r)
+            tool_id = item["id"]
+            plan_name = item.get("plan_name") or "Standard"
+            budget_amount = float(item.get("budget_amount") or 0.0)
+            unit = item.get("unit") or "USD"
+
+            # Calculate usage this month from tool_usage_log
+            cursor.execute(
+                "SELECT SUM(amount_used) FROM tool_usage_log WHERE tool_id = ? AND date LIKE ?;",
+                (tool_id, f"{current_month_str}%")
+            )
+            usage_row = cursor.fetchone()
+            used_this_month = float(usage_row[0] or 0.0)
+
+            left = max(0.0, budget_amount - used_this_month)
+            percent_used = round((used_this_month / budget_amount * 100), 1) if budget_amount > 0 else 0.0
+
             try:
                 renewal = datetime.date.fromisoformat(item["renewal_date"])
                 delta = (renewal - today).days
             except Exception:
-                delta = 999
+                renewal = today + datetime.timedelta(days=30)
+                delta = 30
 
             if delta < 0:
                 status_str = f"Overdue by {abs(delta)} days"
@@ -1108,36 +1398,77 @@ def get_tools():
             else:
                 status_str = f"Renews in {delta} days"
 
+            days_elapsed = max(1, today.day)
+            daily_pace = round(used_this_month / days_elapsed, 2)
+            days_remaining_cycle = max(1, delta if delta > 0 else 1)
+            average_allowed_per_day = round(left / days_remaining_cycle, 2)
+
+            runs_out_early = False
+            if daily_pace > 0:
+                days_until_runout = int(left / daily_pace)
+                projected_runout_date = today + datetime.timedelta(days=days_until_runout)
+                projected_runout_str = projected_runout_date.isoformat()
+                if delta > 0 and days_until_runout < delta:
+                    runs_out_early = True
+            else:
+                days_until_runout = 9999
+                projected_runout_str = "No pace"
+
+            # Plain warning labels
+            warnings = []
+            if runs_out_early:
+                warnings.append(f"Runs out in {days_until_runout}d (before renewal)")
+            if percent_used >= 80.0:
+                warnings.append(f"{percent_used:.0f}% budget used")
+            if 0 <= delta <= 7:
+                warnings.append(f"Renews in {delta}d")
+            elif delta < 0:
+                warnings.append(f"Renewal overdue by {abs(delta)}d")
+
+            item["plan_name"] = plan_name
+            item["budget_amount"] = budget_amount
+            item["unit"] = unit
+            item["used_this_month"] = used_this_month
+            item["amount_left"] = left
+            item["percent_used"] = percent_used
             item["days_until_renewal"] = delta
-            item["is_warning"] = (0 <= delta <= 7) or (delta < 0)
             item["renewal_status"] = status_str
+            item["daily_pace"] = daily_pace
+            item["average_allowed_per_day"] = average_allowed_per_day
+            item["projected_runout_date"] = projected_runout_str
+            item["projected_runout_days"] = days_until_runout
+            item["runs_out_early"] = runs_out_early
+            item["warning_labels"] = warnings
+            item["is_warning"] = len(warnings) > 0
+
             tools.append(item)
         return tools
     finally:
         conn.close()
 
 
-@app.post("/api/tools")
+@app.post("/api/tools", dependencies=[Depends(verify_access_code)])
 def create_tool(payload: ToolCreate):
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Tool name cannot be empty.")
     cost = float(payload.monthly_cost)
-    if cost <= 0:
-        raise HTTPException(status_code=400, detail="Monthly cost must be greater than 0.")
+    budget = float(payload.budget_amount)
+    plan = (payload.plan_name or "Standard").strip()
+    unit = (payload.unit or "USD").strip()
 
     conn = get_db_connection()
     try:
         cursor = conn.cursor()
         cursor.execute("""
-            INSERT INTO tools (name, monthly_cost, renewal_date, owner_name, notes)
-            VALUES (?, ?, ?, ?, ?);
-        """, (name, cost, payload.renewal_date.strip(), (payload.owner_name or "Team").strip(), (payload.notes or "").strip()))
+            INSERT INTO tools (name, plan_name, budget_amount, unit, monthly_cost, renewal_date, owner_name, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        """, (name, plan, budget, unit, cost, payload.renewal_date.strip(), (payload.owner_name or "Team").strip(), (payload.notes or "").strip()))
         tool_id = cursor.lastrowid
         creator = (payload.creator_name or "Team").strip()
         cursor.execute(
             "INSERT INTO activity_log (member_name, action, details) VALUES (?, ?, ?);",
-            (creator, "Added Tool", f"Added software tool '{name}' (${cost:.0f}/mo).")
+            (creator, "Added Tool", f"Added software tool '{name}' ({plan}, budget {budget} {unit}).")
         )
         conn.commit()
         created = conn.execute("SELECT * FROM tools WHERE id = ?;", (tool_id,)).fetchone()
@@ -1146,7 +1477,71 @@ def create_tool(payload: ToolCreate):
         conn.close()
 
 
-@app.post("/api/tools/{tool_id}/record-payment")
+@app.post("/api/tools/{tool_id}/usage", dependencies=[Depends(verify_access_code)])
+def add_tool_usage(tool_id: int, payload: ToolUsageCreate):
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name, unit FROM tools WHERE id = ?;", (tool_id,))
+        tool = cursor.fetchone()
+        if not tool:
+            raise HTTPException(status_code=404, detail="Tool not found.")
+
+        amt = float(payload.amount_used)
+        date_str = payload.date.strip()
+        note = (payload.note or "").strip()
+        creator = (payload.creator_name or "Team").strip()
+
+        cursor.execute("""
+            INSERT INTO tool_usage_log (tool_id, date, amount_used, note)
+            VALUES (?, ?, ?, ?);
+        """, (tool_id, date_str, amt, note))
+        log_id = cursor.lastrowid
+
+        cursor.execute(
+            "INSERT INTO activity_log (member_name, action, details) VALUES (?, ?, ?);",
+            (creator, "Logged Tool Usage", f"Logged {amt} {tool['unit']} usage for '{tool['name']}' ({date_str}).")
+        )
+        conn.commit()
+        return {"success": True, "id": log_id, "tool_id": tool_id, "amount_used": amt, "date": date_str}
+    finally:
+        conn.close()
+
+
+@app.post("/api/tools/{tool_id}/set-total-usage", dependencies=[Depends(verify_access_code)])
+def set_tool_total_usage(tool_id: int, payload: ToolUsageSetTotal):
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name, unit FROM tools WHERE id = ?;", (tool_id,))
+        tool = cursor.fetchone()
+        if not tool:
+            raise HTTPException(status_code=404, detail="Tool not found.")
+
+        today = datetime.date.today()
+        month = (payload.month or "").strip() or today.strftime("%Y-%m")
+        target_total = float(payload.total_amount_used)
+        creator = (payload.creator_name or "Team").strip()
+        note = (payload.note or "Adjusted monthly total").strip()
+
+        # Delete existing logs for this month and replace with target total entry
+        cursor.execute("DELETE FROM tool_usage_log WHERE tool_id = ? AND date LIKE ?;", (tool_id, f"{month}%"))
+        cursor.execute("""
+            INSERT INTO tool_usage_log (tool_id, date, amount_used, note)
+            VALUES (?, ?, ?, ?);
+        """, (tool_id, today.isoformat(), target_total, note))
+
+        cursor.execute(
+            "INSERT INTO activity_log (member_name, action, details) VALUES (?, ?, ?);",
+            (creator, "Set Tool Total Usage", f"Set monthly usage for '{tool['name']}' to {target_total} {tool['unit']} ({month}).")
+        )
+        conn.commit()
+        return {"success": True, "tool_id": tool_id, "total_amount_used": target_total, "month": month}
+    finally:
+        conn.close()
+
+
+@app.post("/api/tools/{tool_id}/record-payment", dependencies=[Depends(verify_access_code)])
 def record_tool_payment(tool_id: int, payload: dict = None):
     payload = payload or {}
     conn = get_db_connection()
@@ -1230,6 +1625,487 @@ def mark_notification_read(notification_id: int):
         return {"success": True, "notification_id": notification_id}
     finally:
         conn.close()
+
+
+# ------------------------------------------------------------------------------
+# Stage 8: Centralized Notification Center (Part 4)
+# ------------------------------------------------------------------------------
+
+def generate_computed_notifications(conn):
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, name FROM members;")
+    members = cursor.fetchall()
+    if not members:
+        return
+
+    today = datetime.date.today()
+    today_str = today.isoformat()
+    cur_month_str = today.strftime("%Y-%m")
+
+    # 1. Tools: renewals in 7 days and 3 days, and projected to run out early
+    cursor.execute("SELECT * FROM tools;")
+    tools = cursor.fetchall()
+
+    for tool in tools:
+        t_id = tool["id"]
+        t_name = tool["name"]
+        cost = float(tool["monthly_cost"] or 0.0)
+        budget = float(tool["budget_amount"] or 0.0)
+        unit = tool["unit"] or "USD"
+
+        # Renewal alerts (7 days & 3 days)
+        try:
+            r_date = datetime.date.fromisoformat(tool["renewal_date"])
+            days_until = (r_date - today).days
+            if days_until == 7:
+                text = f"Tool '{t_name}' renews in 7 days (${cost:.0f})"
+                for m in members:
+                    s_key = f"tool-ren7d-{t_id}-{today_str}-m{m['id']}"
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO notifications (member_id, type, text, link_type, link_id, is_read, stable_key)
+                        VALUES (?, 'tool_renewal', ?, 'tool', ?, 0, ?);
+                    """, (m["id"], text, t_id, s_key))
+            elif days_until == 3:
+                text = f"Tool '{t_name}' renews in 3 days (${cost:.0f})"
+                for m in members:
+                    s_key = f"tool-ren3d-{t_id}-{today_str}-m{m['id']}"
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO notifications (member_id, type, text, link_type, link_id, is_read, stable_key)
+                        VALUES (?, 'tool_renewal', ?, 'tool', ?, 0, ?);
+                    """, (m["id"], text, t_id, s_key))
+        except Exception:
+            pass
+
+        # Projected run-out alert
+        if budget > 0:
+            cursor.execute(
+                "SELECT SUM(amount_used) FROM tool_usage_log WHERE tool_id = ? AND date LIKE ?;",
+                (t_id, f"{cur_month_str}%")
+            )
+            u_row = cursor.fetchone()
+            used = float(u_row[0] or 0.0) if u_row else 0.0
+
+            day_of_month = max(1, today.day)
+            daily_pace = used / day_of_month
+            if daily_pace > 0:
+                days_can_last = (budget - used) / daily_pace
+                if days_can_last >= 0:
+                    runout_date = today + datetime.timedelta(days=int(days_can_last))
+                    try:
+                        r_date = datetime.date.fromisoformat(tool["renewal_date"])
+                        if runout_date < r_date and runout_date >= today:
+                            text = f"Tool '{t_name}' projected to run out early on {runout_date.isoformat()} (pace: {daily_pace:.1f} {unit}/day)"
+                            for m in members:
+                                s_key = f"tool-runout-{t_id}-{today_str}-m{m['id']}"
+                                cursor.execute("""
+                                    INSERT OR IGNORE INTO notifications (member_id, type, text, link_type, link_id, is_read, stable_key)
+                                    VALUES (?, 'tool_budget', ?, 'tool', ?, 0, ?);
+                                """, (m["id"], text, t_id, s_key))
+                    except Exception:
+                        pass
+
+    # 2. Overdue client payments
+    _, days_in_month = calendar.monthrange(today.year, today.month)
+    cursor.execute("SELECT id, name, billing_day, monthly_fee FROM clients ORDER BY name ASC;")
+    clients = cursor.fetchall()
+
+    cursor.execute("SELECT client_id, amount_expected, amount_received FROM client_payments WHERE month = ?;", (cur_month_str,))
+    payment_map = {r["client_id"]: r for r in cursor.fetchall()}
+
+    for c in clients:
+        cid = c["id"]
+        cname = c["name"]
+        fee = float(c["monthly_fee"] or 0.0)
+        pay = payment_map.get(cid)
+        exp = float(pay["amount_expected"]) if pay else fee
+        rec = float(pay["amount_received"]) if pay else 0.0
+        bal = max(0.0, exp - rec)
+
+        b_day = int(c["billing_day"] or 1)
+        safe_day = min(b_day, days_in_month)
+        due_date = datetime.date(today.year, today.month, safe_day)
+
+        if bal > 0 and today > due_date:
+            text = f"Payment overdue for {cname}: ${bal:.0f} pending (was due {due_date.isoformat()})"
+            for m in members:
+                s_key = f"client-overdue-{cid}-{today_str}-m{m['id']}"
+                cursor.execute("""
+                    INSERT OR IGNORE INTO notifications (member_id, type, text, link_type, link_id, is_read, stable_key)
+                    VALUES (?, 'client_payment', ?, 'dues', ?, 0, ?);
+                """, (m["id"], text, cid, s_key))
+
+    # 3. Month-end reminder from Part 2
+    reminder = compute_month_end_reminder(conn)
+    if reminder.get("show_banner") and reminder.get("banner_message"):
+        text = reminder["banner_message"]
+        for m in members:
+            s_key = f"month-end-{cur_month_str}-{today_str}-m{m['id']}"
+            cursor.execute("""
+                INSERT OR IGNORE INTO notifications (member_id, type, text, link_type, link_id, is_read, stable_key)
+                VALUES (?, 'month_end', ?, 'dues', 0, 0, ?);
+            """, (m["id"], text, s_key))
+
+    conn.commit()
+
+
+@app.get("/api/notifications-center", dependencies=[Depends(verify_access_code)])
+def get_notifications_center(member_id: Optional[int] = None):
+    conn = get_db_connection()
+    try:
+        generate_computed_notifications(conn)
+        cursor = conn.cursor()
+
+        if member_id is not None:
+            cursor.execute(
+                "SELECT COUNT(*) FROM notifications WHERE member_id = ? AND is_read = 0;",
+                (member_id,)
+            )
+            unread_count = cursor.fetchone()[0]
+
+            cursor.execute("""
+                SELECT * FROM notifications
+                WHERE member_id = ?
+                ORDER BY is_read ASC, created_at DESC;
+            """, (member_id,))
+            rows = cursor.fetchall()
+        else:
+            cursor.execute("SELECT COUNT(*) FROM notifications WHERE is_read = 0;")
+            unread_count = cursor.fetchone()[0]
+
+            cursor.execute("""
+                SELECT * FROM notifications
+                ORDER BY is_read ASC, created_at DESC;
+            """)
+            rows = cursor.fetchall()
+
+        items = []
+        for r in rows:
+            d = dict(r)
+            d["read"] = bool(d["is_read"])
+            items.append(d)
+
+        return {
+            "member_id": member_id,
+            "unread_count": unread_count,
+            "notifications": items
+        }
+    finally:
+        conn.close()
+
+
+@app.patch("/api/notifications-center/{notification_id}/read", dependencies=[Depends(verify_access_code)])
+def mark_center_notification_read(notification_id: int):
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE notifications SET is_read = 1 WHERE id = ?;", (notification_id,))
+        conn.commit()
+        return {"success": True, "id": notification_id}
+    finally:
+        conn.close()
+
+
+@app.post("/api/notifications-center/mark-all-read", dependencies=[Depends(verify_access_code)])
+def mark_all_center_notifications_read(member_id: Optional[int] = None):
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        if member_id is not None:
+            cursor.execute("UPDATE notifications SET is_read = 1 WHERE member_id = ?;", (member_id,))
+        else:
+            cursor.execute("UPDATE notifications SET is_read = 1;")
+        conn.commit()
+        return {"success": True, "member_id": member_id}
+    finally:
+        conn.close()
+
+
+# ------------------------------------------------------------------------------
+# Stage 8 Part 5: Receipt Reader AI
+# ------------------------------------------------------------------------------
+
+@app.post("/api/ai/parse-receipt", dependencies=[Depends(verify_access_code)])
+async def parse_receipt_endpoint(payload: ReceiptParseRequest):
+    text = payload.receipt_text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Receipt text cannot be empty.")
+    try:
+        parsed = await parse_tool_receipt(text)
+        return parsed
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.post("/api/tools/save-from-receipt", dependencies=[Depends(verify_access_code)])
+def save_tool_from_receipt(payload: ToolSaveFromReceipt):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Tool name cannot be empty.")
+
+    plan_name = (payload.plan_name or "Standard").strip()
+    monthly_cost = float(payload.monthly_cost or 0.0)
+    budget_amount = float(payload.budget_amount or monthly_cost)
+    unit = (payload.unit or "USD").strip() or "USD"
+    renewal_date = (payload.renewal_date or "").strip()
+    if not renewal_date:
+        today = datetime.date.today()
+        renewal_date = (today + datetime.timedelta(days=30)).isoformat()
+    owner_name = (payload.owner_name or "Team").strip()
+    notes = (payload.notes or "").strip()
+    creator = (payload.creator_name or "Team").strip()
+
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, name FROM tools WHERE LOWER(name) = LOWER(?);", (name,))
+        existing = cursor.fetchone()
+
+        if existing:
+            tool_id = existing["id"]
+            cursor.execute("""
+                UPDATE tools
+                SET plan_name = ?, monthly_cost = ?, budget_amount = ?, unit = ?,
+                    renewal_date = ?, owner_name = ?, notes = ?
+                WHERE id = ?;
+            """, (plan_name, monthly_cost, budget_amount, unit, renewal_date, owner_name, notes, tool_id))
+            action = "Updated Tool from Receipt"
+            msg = f"Updated '{name}' details from receipt ({plan_name}, ${monthly_cost:.0f}/mo)."
+        else:
+            cursor.execute("""
+                INSERT INTO tools (name, plan_name, monthly_cost, budget_amount, unit, renewal_date, owner_name, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+            """, (name, plan_name, monthly_cost, budget_amount, unit, renewal_date, owner_name, notes))
+            tool_id = cursor.lastrowid
+            action = "Created Tool from Receipt"
+            msg = f"Created tool '{name}' from receipt ({plan_name}, ${monthly_cost:.0f}/mo)."
+
+        expense_id = None
+        if payload.record_expense and monthly_cost > 0:
+            today = datetime.date.today()
+            current_month = today.strftime("%Y-%m")
+            exp_note = f"Subscription payment for {name} ({plan_name}) logged via receipt reader"
+            if notes:
+                exp_note += f" - {notes}"
+            cursor.execute("""
+                INSERT INTO expenses (tool_name, amount, month, notes)
+                VALUES (?, ?, ?, ?);
+            """, (name, monthly_cost, current_month, exp_note))
+            expense_id = cursor.lastrowid
+
+        cursor.execute(
+            "INSERT INTO activity_log (member_name, action, details) VALUES (?, ?, ?);",
+            (creator, action, msg)
+        )
+        conn.commit()
+
+        return {
+            "success": True,
+            "tool_id": tool_id,
+            "tool_name": name,
+            "monthly_cost": monthly_cost,
+            "plan_name": plan_name,
+            "renewal_date": renewal_date,
+            "expense_recorded": bool(expense_id)
+        }
+    finally:
+        conn.close()
+
+
+# ------------------------------------------------------------------------------
+# Stage 8 Part 6: Monthly Report & Executive Summary
+# ------------------------------------------------------------------------------
+
+@app.get("/api/report", dependencies=[Depends(verify_access_code)])
+def get_monthly_report(month: Optional[str] = None):
+    conn = get_db_connection()
+    try:
+        today = datetime.date.today()
+        selected_month = (month or "").strip() or today.strftime("%Y-%m")
+
+        cursor = conn.cursor()
+
+        # 1. Available months
+        cursor.execute("SELECT DISTINCT month FROM client_payments ORDER BY month DESC;")
+        months_set = {r["month"] for r in cursor.fetchall()}
+        cursor.execute("SELECT DISTINCT month FROM income ORDER BY month DESC;")
+        months_set.update({r["month"] for r in cursor.fetchall()})
+        cursor.execute("SELECT DISTINCT month FROM expenses ORDER BY month DESC;")
+        months_set.update({r["month"] for r in cursor.fetchall()})
+        months_set.add(today.strftime("%Y-%m"))
+        available_months = sorted(list(months_set), reverse=True)
+
+        # 2. Tasks stats in month
+        cursor.execute("""
+            SELECT t.id, t.title, t.status, t.client_id, t.assigned_member_id, t.created_at,
+                   c.name as client_name, m.name as member_name
+            FROM tasks t
+            LEFT JOIN clients c ON t.client_id = c.id
+            LEFT JOIN members m ON t.assigned_member_id = m.id
+            WHERE t.created_at LIKE ?;
+        """, (f"{selected_month}%",))
+        tasks_in_month = [dict(r) for r in cursor.fetchall()]
+
+        total_tasks_created = len(tasks_in_month)
+        total_tasks_completed = sum(1 for t in tasks_in_month if t["status"] == "done")
+
+        tasks_by_client = {}
+        for t in tasks_in_month:
+            cname = t["client_name"] or "Unknown Client"
+            if cname not in tasks_by_client:
+                tasks_by_client[cname] = {"created": 0, "completed": 0}
+            tasks_by_client[cname]["created"] += 1
+            if t["status"] == "done":
+                tasks_by_client[cname]["completed"] += 1
+
+        tasks_by_member = {}
+        for t in tasks_in_month:
+            mname = t["member_name"] or "Unassigned"
+            if mname not in tasks_by_member:
+                tasks_by_member[mname] = {"created": 0, "completed": 0}
+            tasks_by_member[mname]["created"] += 1
+            if t["status"] == "done":
+                tasks_by_member[mname]["completed"] += 1
+
+        # 3. Client payments expected vs received and pending
+        cursor.execute("SELECT id, name, billing_day, monthly_fee FROM clients ORDER BY name ASC;")
+        clients = cursor.fetchall()
+
+        cursor.execute("SELECT * FROM client_payments WHERE month = ?;", (selected_month,))
+        payment_map = {r["client_id"]: dict(r) for r in cursor.fetchall()}
+
+        total_expected = 0.0
+        total_received = 0.0
+        pending_clients = []
+
+        _, days_in_month = calendar.monthrange(today.year, today.month)
+
+        for c in clients:
+            cid = c["id"]
+            cname = c["name"]
+            fee = float(c["monthly_fee"] or 0.0)
+            pay = payment_map.get(cid)
+            exp = float(pay["amount_expected"]) if pay else fee
+            rec = float(pay["amount_received"]) if pay else 0.0
+            bal = max(0.0, exp - rec)
+
+            total_expected += exp
+            total_received += rec
+
+            b_day = int(c["billing_day"] or 1)
+            safe_day = min(b_day, days_in_month)
+            due_date = f"{selected_month}-{safe_day:02d}"
+
+            status = "paid"
+            if rec >= exp and exp > 0:
+                status = "paid"
+            elif rec > 0:
+                status = "partial"
+            elif bal > 0 and today.strftime("%Y-%m") == selected_month and today > datetime.date(today.year, today.month, safe_day):
+                status = "overdue"
+            elif bal > 0:
+                status = "pending"
+
+            if bal > 0:
+                pending_clients.append({
+                    "client_id": cid,
+                    "client_name": cname,
+                    "amount_expected": exp,
+                    "amount_received": rec,
+                    "balance": bal,
+                    "due_date": due_date,
+                    "status": status
+                })
+
+        total_pending = max(0.0, total_expected - total_received)
+
+        # 4. Tool spend and budget status
+        cursor.execute("SELECT SUM(amount) FROM expenses WHERE month = ?;", (selected_month,))
+        expense_row = cursor.fetchone()
+        total_tool_spend = float(expense_row[0] or 0.0)
+
+        cursor.execute("SELECT id, name, plan_name, monthly_cost, budget_amount, unit, renewal_date FROM tools ORDER BY name ASC;")
+        all_tools = cursor.fetchall()
+        tools_status = []
+        total_budget_sum = 0.0
+
+        for tool in all_tools:
+            t_id = tool["id"]
+            b_amt = float(tool["budget_amount"] or 0.0)
+            total_budget_sum += b_amt
+
+            cursor.execute(
+                "SELECT SUM(amount_used) FROM tool_usage_log WHERE tool_id = ? AND date LIKE ?;",
+                (t_id, f"{selected_month}%")
+            )
+            u_row = cursor.fetchone()
+            used = float(u_row[0] or 0.0) if u_row else 0.0
+            left = max(0.0, b_amt - used)
+            pct = round((used / b_amt * 100), 1) if b_amt > 0 else 0.0
+
+            tools_status.append({
+                "id": t_id,
+                "name": tool["name"],
+                "plan_name": tool["plan_name"] or "Standard",
+                "monthly_cost": float(tool["monthly_cost"] or 0.0),
+                "budget_amount": b_amt,
+                "used": used,
+                "left": left,
+                "percent_used": pct,
+                "unit": tool["unit"] or "USD",
+                "renewal_date": tool["renewal_date"]
+            })
+
+        # 5. Activity counts
+        cursor.execute("SELECT COUNT(*) FROM activity_log WHERE timestamp LIKE ?;", (f"{selected_month}%",))
+        total_activity_count = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT action, COUNT(*) as count
+            FROM activity_log
+            WHERE timestamp LIKE ?
+            GROUP BY action
+            ORDER BY count DESC;
+        """, (f"{selected_month}%",))
+        activity_by_action = {r["action"]: r["count"] for r in cursor.fetchall()}
+
+        return {
+            "month": selected_month,
+            "available_months": available_months,
+            "tasks": {
+                "created_count": total_tasks_created,
+                "completed_count": total_tasks_completed,
+                "by_client": tasks_by_client,
+                "by_member": tasks_by_member
+            },
+            "payments": {
+                "total_expected": total_expected,
+                "total_received": total_received,
+                "total_pending": total_pending,
+                "pending_clients": pending_clients
+            },
+            "tools": {
+                "total_spend": total_tool_spend,
+                "total_budget": total_budget_sum,
+                "tools_list": tools_status
+            },
+            "activity": {
+                "total_count": total_activity_count,
+                "by_action": activity_by_action
+            }
+        }
+    finally:
+        conn.close()
+
+
+@app.post("/api/ai/report-summary", dependencies=[Depends(verify_access_code)])
+async def generate_report_summary_endpoint(payload: ReportSummaryRequest):
+    try:
+        summary = await generate_monthly_report_summary(payload.metrics)
+        return {"success": True, "summary": summary}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 
 # Mount frontend static files last

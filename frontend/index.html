@@ -49,11 +49,15 @@
 
     <!-- Sidebar Navigation -->
     <aside class="sidebar" id="sidebar">
-      <div class="sidebar-header">
+      <div class="sidebar-header" style="display: flex; justify-content: space-between; align-items: center;">
         <div class="brand">
           <div class="brand-name">Newvora HQ</div>
           <div class="brand-tag">Internal Workspace</div>
         </div>
+        <button type="button" class="btn-bell" id="btnNotificationsBell" title="Notifications" aria-label="Notifications">
+          <span class="bell-icon">&#128276;</span>
+          <span id="bellUnreadBadge" class="bell-badge hidden">0</span>
+        </button>
       </div>
 
       <!-- Who are you? Member Selector -->
@@ -92,6 +96,8 @@
         <a href="#dues" class="nav-link" data-view="dues">Dues</a>
         <a href="#tools" class="nav-link" data-view="tools">Tools</a>
         <a href="#money" class="nav-link" data-view="money">Money</a>
+        <a href="#notifications" class="nav-link" data-view="notifications">Notifications</a>
+        <a href="#report" class="nav-link" data-view="report">Report</a>
         <a href="#activity" class="nav-link" data-view="activity">Activity</a>
       </nav>
 
@@ -220,7 +226,68 @@
                 <option value="all">All Members</option>
               </select>
             </div>
-            <button type="button" class="btn btn-secondary btn-sm" id="btnRefreshBoard">Refresh board</button>
+            <div class="form-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="btnOpenNewTask">+ New task</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnRefreshBoard">Refresh board</button>
+            </div>
+          </div>
+
+          <!-- Manual New Task Card (Part 1) -->
+          <div id="newTaskCard" class="panel mb-4 hidden">
+            <div class="panel-header">
+              <h3 class="panel-title">Create New Task</h3>
+            </div>
+            <div class="panel-body">
+              <form id="newTaskForm">
+                <div class="form-row">
+                  <div class="form-group flex-1">
+                    <label for="newTaskClientSelect" class="field-label">Client *</label>
+                    <select id="newTaskClientSelect" class="form-select" required>
+                      <option value="" disabled selected>Select client...</option>
+                    </select>
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="newTaskTypeSelect" class="field-label">Type *</label>
+                    <select id="newTaskTypeSelect" class="form-select">
+                      <option value="bug">Bug</option>
+                      <option value="new_feature">New Feature</option>
+                      <option value="data_update">Data Update</option>
+                      <option value="content_change" selected>Content Change</option>
+                      <option value="question">Question</option>
+                    </select>
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="newTaskPrioritySelect" class="field-label">Priority *</label>
+                    <select id="newTaskPrioritySelect" class="form-select">
+                      <option value="low">Low</option>
+                      <option value="medium" selected>Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="form-row mt-3">
+                  <div class="form-group flex-1" style="flex: 2;">
+                    <label for="newTaskTitleInput" class="field-label">Task Title *</label>
+                    <input type="text" id="newTaskTitleInput" class="form-input" placeholder="e.g. Update hero section copy and images" required />
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="newTaskAssigneeSelect" class="field-label">Assignee (Optional)</label>
+                    <select id="newTaskAssigneeSelect" class="form-select">
+                      <option value="">Unassigned</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="form-group mt-3">
+                  <label for="newTaskDescriptionInput" class="field-label">Description</label>
+                  <textarea id="newTaskDescriptionInput" class="form-textarea" rows="2" placeholder="Task details, instructions, or notes..."></textarea>
+                </div>
+                <div class="form-actions mt-3">
+                  <button type="submit" class="btn btn-primary btn-sm" id="btnSaveNewTask">Save task</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btnCancelNewTask">Cancel</button>
+                </div>
+                <div id="newTaskError" class="form-error mt-2 hidden"></div>
+              </form>
+            </div>
           </div>
 
           <!-- Kanban Columns: To do, Doing, Done -->
@@ -463,6 +530,9 @@
              VIEW: DUES (Stage 7)
              ================================================================ -->
         <section id="view-dues" class="view-pane">
+          <!-- Month End Reminder Banner (Part 2) -->
+          <div id="duesMonthEndBanner" class="month-end-banner hidden"></div>
+
           <div class="sub-header-bar mb-3">
             <div>
               <h2 class="section-title">Client Dues & Retainers</h2>
@@ -472,8 +542,6 @@
               <label for="duesMonthSelect" class="filter-label">Month:</label>
               <select id="duesMonthSelect" class="form-select form-select-sm filter-select">
                 <option value="2026-10" selected>October 2026</option>
-                <option value="2026-09">September 2026</option>
-                <option value="2026-11">November 2026</option>
               </select>
             </div>
           </div>
@@ -492,6 +560,57 @@
             </div>
           </div>
 
+          <!-- Record / Edit Client Payment Card (Part 2) -->
+          <div id="duesPaymentCard" class="panel mb-4 hidden">
+            <div class="panel-header">
+              <h3 class="panel-title" id="duesPaymentFormTitle">Record Client Payment</h3>
+            </div>
+            <div class="panel-body">
+              <form id="duesPaymentForm">
+                <input type="hidden" id="paymentClientId" value="" />
+                <div class="form-row">
+                  <div class="form-group flex-1">
+                    <label for="paymentClientName" class="field-label">Client</label>
+                    <input type="text" id="paymentClientName" class="form-input" readonly style="background-color: var(--bg-subtle);" />
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="paymentMonth" class="field-label">Month</label>
+                    <input type="text" id="paymentMonth" class="form-input" readonly style="background-color: var(--bg-subtle);" />
+                  </div>
+                </div>
+                <div class="form-row mt-3">
+                  <div class="form-group flex-1">
+                    <label for="paymentAmountExpected" class="field-label">Amount Expected ($) *</label>
+                    <input type="number" id="paymentAmountExpected" class="form-input" step="1" min="0" required />
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="paymentAmountReceived" class="field-label">Amount Received ($) *</label>
+                    <input type="number" id="paymentAmountReceived" class="form-input" step="1" min="0" required />
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="paymentDateReceived" class="field-label">Date Received</label>
+                    <input type="date" id="paymentDateReceived" class="form-input" />
+                  </div>
+                </div>
+                <div class="form-row mt-3">
+                  <div class="form-group flex-1">
+                    <label for="paymentMethod" class="field-label">Payment Method</label>
+                    <input type="text" id="paymentMethod" class="form-input" placeholder="e.g. UPI, Bank Transfer, Card, Cash" />
+                  </div>
+                  <div class="form-group flex-1" style="flex: 2;">
+                    <label for="paymentNote" class="field-label">Note</label>
+                    <input type="text" id="paymentNote" class="form-input" placeholder="e.g. Full settlement, installment 1, etc." />
+                  </div>
+                </div>
+                <div class="form-actions mt-3">
+                  <button type="submit" class="btn btn-primary btn-sm" id="btnSavePayment">Save payment</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="btnCancelPayment">Cancel</button>
+                </div>
+                <div id="duesPaymentError" class="form-error mt-2 hidden"></div>
+              </form>
+            </div>
+          </div>
+
           <!-- Dues Table -->
           <div class="panel">
             <div class="table-responsive">
@@ -499,15 +618,16 @@
                 <thead>
                   <tr>
                     <th>Client</th>
-                    <th>Monthly Retainer</th>
-                    <th>Billing Day / Due Date</th>
-                    <th>Monthly Fee Status</th>
-                    <th>Establishment Balance</th>
+                    <th>Expected</th>
+                    <th>Received</th>
+                    <th>Balance</th>
+                    <th>Due Date</th>
+                    <th>Status</th>
                     <th class="text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="duesTableBody">
-                  <tr><td colspan="6" class="text-muted text-center py-4">Loading client dues...</td></tr>
+                  <tr><td colspan="7" class="text-muted text-center py-4">Loading client dues...</td></tr>
                 </tbody>
               </table>
             </div>
@@ -521,12 +641,91 @@
           <div class="sub-header-bar mb-3">
             <div>
               <h2 class="section-title">Software Tools & Subscriptions</h2>
-              <span class="section-tagline">Track monthly tool costs, renewal dates, owners, and log subscription expenses</span>
+              <span class="section-tagline">Track tool budgets, usage pace, run-out projections, and renewals</span>
             </div>
-            <button type="button" class="btn btn-primary btn-sm" id="btnOpenAddTool">+ Add tool</button>
+            <div class="form-actions">
+              <button type="button" class="btn btn-primary btn-sm" id="btnOpenAddTool">+ Add tool</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnToggleReceiptReader">Add tool from receipt</button>
+            </div>
           </div>
 
-          <!-- Inline Add Tool Card (Hidden by default) -->
+          <!-- Add Tool from Receipt Box (Part 5) -->
+          <div id="receiptReaderCard" class="panel mb-4 hidden">
+            <div class="panel-header">
+              <h3 class="panel-title">Add Tool from Receipt</h3>
+              <span class="panel-subtitle">Paste invoice or subscription email text to auto-fill details using Gemma</span>
+            </div>
+            <div class="panel-body">
+              <div class="form-group">
+                <label for="receiptTextInput" class="field-label">Receipt / Invoice Text</label>
+                <textarea id="receiptTextInput" class="form-textarea" rows="4" placeholder="Paste the text of your receipt, subscription email, or invoice here..."></textarea>
+                <div class="text-muted mt-1" style="font-size: 12px; font-weight: 600; color: #a05a00;">
+                  &#9888; Do not paste card numbers or passwords.
+                </div>
+              </div>
+              <div class="form-actions mt-3">
+                <button type="button" class="btn btn-primary btn-sm" id="btnParseReceipt">Extract with Gemma</button>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnCancelReceipt">Cancel</button>
+              </div>
+
+              <!-- Loading & Error -->
+              <div id="receiptLoading" class="inbox-status-line hidden mt-3">
+                <span class="reading-text">Analyzing receipt with Gemma...</span>
+              </div>
+              <div id="receiptError" class="form-error mt-2 hidden"></div>
+
+              <!-- Parsed Receipt Form Preview -->
+              <div id="receiptResultCard" class="mt-4 hidden" style="border-top: 1px dashed var(--border-color); padding-top: 16px;">
+                <h4 style="font-size: 14px; font-weight: 700; margin-bottom: 12px;">Review Extracted Tool Details</h4>
+                <form id="receiptSaveForm">
+                  <div class="form-row">
+                    <div class="form-group flex-1">
+                      <label for="receiptToolName" class="field-label">Tool Name *</label>
+                      <input type="text" id="receiptToolName" class="form-input" required />
+                    </div>
+                    <div class="form-group flex-1">
+                      <label for="receiptPlanName" class="field-label">Plan Name</label>
+                      <input type="text" id="receiptPlanName" class="form-input" />
+                    </div>
+                    <div class="form-group flex-1">
+                      <label for="receiptAmount" class="field-label">Cost / Amount</label>
+                      <input type="number" id="receiptAmount" class="form-input" step="0.5" min="0" />
+                    </div>
+                  </div>
+                  <div class="form-row mt-3">
+                    <div class="form-group flex-1">
+                      <label for="receiptUnit" class="field-label">Currency / Unit</label>
+                      <input type="text" id="receiptUnit" class="form-input" value="USD" />
+                    </div>
+                    <div class="form-group flex-1">
+                      <label for="receiptRenewalDate" class="field-label">Next Renewal Date</label>
+                      <input type="date" id="receiptRenewalDate" class="form-input" />
+                    </div>
+                    <div class="form-group flex-1">
+                      <label for="receiptOwner" class="field-label">Owner</label>
+                      <input type="text" id="receiptOwner" class="form-input" placeholder="e.g. Riya" />
+                    </div>
+                  </div>
+                  <div class="form-group mt-3">
+                    <label for="receiptNotes" class="field-label">Notes</label>
+                    <input type="text" id="receiptNotes" class="form-input" />
+                  </div>
+                  <div class="form-group mt-3" style="flex-direction: row; align-items: center; gap: 8px;">
+                    <input type="checkbox" id="receiptRecordExpense" checked style="width: 16px; height: 16px;" />
+                    <label for="receiptRecordExpense" style="font-size: 13px; font-weight: 600; cursor: pointer;">
+                      Record this expense in Money entries for current month
+                    </label>
+                  </div>
+                  <div class="form-actions mt-3">
+                    <button type="submit" class="btn btn-primary btn-sm" id="btnSaveReceiptTool">Save tool</button>
+                    <span id="receiptSaveSuccess" class="text-muted ml-2 hidden" style="font-size: 12px; font-weight: 700; color: var(--success-text);">Tool saved!</span>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+
+          <!-- Inline Add Tool Card (Part 3) -->
           <div id="toolFormCard" class="panel mb-4 hidden">
             <div class="panel-header">
               <h3 class="panel-title">Add Software Tool</h3>
@@ -536,11 +735,25 @@
                 <div class="form-row">
                   <div class="form-group flex-1">
                     <label for="toolFormName" class="field-label">Tool Name *</label>
-                    <input type="text" id="toolFormName" class="form-input" placeholder="e.g. Figma, GitHub Copilot, OpenAI" required />
+                    <input type="text" id="toolFormName" class="form-input" placeholder="e.g. Claude, Convex, Supabase" required />
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="toolFormPlan" class="field-label">Plan Name</label>
+                    <input type="text" id="toolFormPlan" class="form-input" placeholder="e.g. Team Pro, Starter" value="Standard" />
                   </div>
                   <div class="form-group flex-1">
                     <label for="toolFormCost" class="field-label">Monthly Cost ($) *</label>
-                    <input type="number" id="toolFormCost" class="form-input" step="1" min="1" placeholder="20" required />
+                    <input type="number" id="toolFormCost" class="form-input" step="1" min="0" placeholder="20" required />
+                  </div>
+                </div>
+                <div class="form-row mt-3">
+                  <div class="form-group flex-1">
+                    <label for="toolFormBudget" class="field-label">Monthly Budget Amount *</label>
+                    <input type="number" id="toolFormBudget" class="form-input" step="1" min="0" placeholder="e.g. 100 or 50000" required />
+                  </div>
+                  <div class="form-group flex-1">
+                    <label for="toolFormUnit" class="field-label">Budget Unit *</label>
+                    <input type="text" id="toolFormUnit" class="form-input" placeholder="e.g. USD, credits, tokens" value="USD" required />
                   </div>
                   <div class="form-group flex-1">
                     <label for="toolFormRenewal" class="field-label">Next Renewal Date *</label>
@@ -552,7 +765,7 @@
                     <label for="toolFormOwner" class="field-label">Owner / Lead</label>
                     <input type="text" id="toolFormOwner" class="form-input" placeholder="e.g. Riya" />
                   </div>
-                  <div class="form-group flex-2">
+                  <div class="form-group flex-2" style="flex: 2;">
                     <label for="toolFormNotes" class="field-label">Notes & Purpose</label>
                     <input type="text" id="toolFormNotes" class="form-input" placeholder="e.g. Team design license, shared api key" />
                   </div>
@@ -572,17 +785,18 @@
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>Tool Name</th>
-                    <th>Monthly Cost</th>
-                    <th>Renewal Date</th>
-                    <th>Status</th>
-                    <th>Owner</th>
-                    <th>Notes</th>
+                    <th>Tool & Plan</th>
+                    <th>Monthly Budget</th>
+                    <th>Used / Left</th>
+                    <th style="min-width: 140px;">Budget Progress</th>
+                    <th>Daily Pace</th>
+                    <th>Renewal &amp; Run-out</th>
+                    <th>Status / Warnings</th>
                     <th class="text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="toolsTableBody">
-                  <tr><td colspan="7" class="text-muted text-center py-4">Loading tools...</td></tr>
+                  <tr><td colspan="8" class="text-muted text-center py-4">Loading tools...</td></tr>
                 </tbody>
               </table>
             </div>
@@ -593,6 +807,9 @@
              VIEW: MONEY (Stage 5)
              ================================================================ -->
         <section id="view-money" class="view-pane">
+          <!-- Month End Reminder Banner (Part 2) -->
+          <div id="moneyMonthEndBanner" class="month-end-banner hidden"></div>
+
           <!-- Summary Strip (Stage 7): Pending Dues and Tools Renewing in 7 Days -->
           <div id="moneySummaryStrip" class="summary-strip panel mb-4 hidden">
             <!-- Dynamically populated -->
@@ -782,6 +999,208 @@
         </section>
 
         <!-- ================================================================
+             VIEW: NOTIFICATIONS (Stage 8 Part 4)
+             ================================================================ -->
+        <section id="view-notifications" class="view-pane">
+          <div class="sub-header-bar mb-3">
+            <div>
+              <h2 class="section-title">Notification Center</h2>
+              <span class="section-tagline" id="notificationsSubheader">Assignments, comments, renewal warnings, and client dues alerts</span>
+            </div>
+            <div class="filter-controls" style="display: flex; gap: 8px;">
+              <button type="button" class="btn btn-secondary btn-sm" id="btnFilterNotifsAll">All</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnFilterNotifsUnread">Unread only</button>
+              <button type="button" class="btn btn-primary btn-sm" id="btnMarkAllNotifsRead">Mark all as read</button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-body">
+              <div id="notificationsEmptyState" class="text-muted text-center py-5 hidden">
+                No notifications to display.
+              </div>
+              <div class="notifications-list" id="notificationsList" style="display: flex; flex-direction: column; gap: 10px;">
+                <!-- Dynamically populated -->
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
+             VIEW: REPORT (Stage 8 Part 6)
+             ================================================================ -->
+        <section id="view-report" class="view-pane">
+          <!-- Sub-header bar: Month selector, Write summary button, Copy report button, Print button -->
+          <div class="sub-header-bar mb-3 no-print">
+            <div>
+              <h2 class="section-title">Monthly Agency Performance Report</h2>
+              <span class="section-tagline">Executive overview of task delivery, client billing, tool expenditures, and audit activity</span>
+            </div>
+            <div class="filter-controls" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+              <label for="reportMonthSelect" class="filter-label">Month:</label>
+              <select id="reportMonthSelect" class="form-select form-select-sm filter-select">
+                <option value="2026-10">October 2026</option>
+              </select>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnWriteReportSummary">&#10024; Write summary</button>
+              <button type="button" class="btn btn-secondary btn-sm" id="btnCopyReport">&#128203; Copy report</button>
+              <button type="button" class="btn btn-primary btn-sm" id="btnPrintReport">&#128424; Print report</button>
+            </div>
+          </div>
+
+          <!-- Printable Report Header (visible when printing) -->
+          <div class="print-only mb-4" style="display: none;">
+            <div style="border-bottom: 2px solid #1b3a2f; padding-bottom: 10px; margin-bottom: 20px;">
+              <h1 style="font-size: 22px; font-weight: 800; margin: 0; color: #1b3a2f;">Newvora HQ &mdash; Monthly Executive Report</h1>
+              <p style="margin: 4px 0 0 0; color: #666; font-size: 13px;" id="printReportSubtitle">Generated for October 2026</p>
+            </div>
+          </div>
+
+          <!-- AI Executive Summary Box -->
+          <div class="panel mb-4" id="reportSummaryPanel">
+            <div class="panel-header" style="display: flex; justify-content: space-between; align-items: center;">
+              <div>
+                <h3 class="panel-title">&#10024; Executive Summary</h3>
+                <span class="panel-subtitle">Gemma plain-language monthly overview (under 150 words)</span>
+              </div>
+              <span id="summaryStatusLabel" class="text-muted" style="font-size: 11px;">Editable</span>
+            </div>
+            <div class="panel-body">
+              <div id="summaryLoadingIndicator" class="inbox-status-line hidden mb-2">
+                <span class="reading-text">Drafting executive summary with Gemma...</span>
+              </div>
+              <div id="summaryErrorMsg" class="form-error hidden mb-2"></div>
+              <textarea id="reportSummaryBox" class="form-textarea" rows="4" placeholder="Click 'Write summary' above to have Gemma generate a concise monthly executive summary from the database metrics, or write your own..."></textarea>
+            </div>
+          </div>
+
+          <!-- Metrics KPI Cards -->
+          <div class="financial-metrics-grid mb-4">
+            <div class="panel metric-card">
+              <span class="metric-label">Task Deliverables</span>
+              <strong class="metric-value metric-income" id="reportMetricTasksCompleted">0 completed</strong>
+              <span class="metric-sub" id="reportMetricTasksCreated">0 created this month</span>
+            </div>
+            <div class="panel metric-card">
+              <span class="metric-label">Client Collections</span>
+              <strong class="metric-value metric-income" id="reportMetricPaymentsCollected">$0</strong>
+              <span class="metric-sub" id="reportMetricPaymentsExpected">$0 expected ($0 pending)</span>
+            </div>
+            <div class="panel metric-card">
+              <span class="metric-label">Tool Subscriptions</span>
+              <strong class="metric-value metric-expense" id="reportMetricToolSpend">$0</strong>
+              <span class="metric-sub" id="reportMetricToolBudget">$0 total budget</span>
+            </div>
+            <div class="panel metric-card">
+              <span class="metric-label">Audit Activity</span>
+              <strong class="metric-value metric-net" id="reportMetricActivityCount">0 actions</strong>
+              <span class="metric-sub">Logged in team history</span>
+            </div>
+          </div>
+
+          <!-- Two Column Grid: Tasks per Client & Tasks per Member -->
+          <div class="finances-two-col mb-4">
+            <div class="finance-col">
+              <div class="panel">
+                <div class="panel-header">
+                  <h3 class="panel-title">Tasks by Client</h3>
+                  <span class="panel-subtitle">Deliverables created and completed per client</span>
+                </div>
+                <div class="table-responsive">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>Client Name</th>
+                        <th style="text-align: center;">Created</th>
+                        <th style="text-align: center;">Completed</th>
+                        <th style="text-align: right;">Completion Rate</th>
+                      </tr>
+                    </thead>
+                    <tbody id="reportTasksByClientBody">
+                      <tr><td colspan="4" class="text-muted text-center py-3">No tasks found for this month.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+
+            <div class="finance-col">
+              <div class="panel">
+                <div class="panel-header">
+                  <h3 class="panel-title">Tasks by Team Member</h3>
+                  <span class="panel-subtitle">Deliverables created and completed per member</span>
+                </div>
+                <div class="table-responsive">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>Member Name</th>
+                        <th style="text-align: center;">Created</th>
+                        <th style="text-align: center;">Completed</th>
+                        <th style="text-align: right;">Completion Rate</th>
+                      </tr>
+                    </thead>
+                    <tbody id="reportTasksByMemberBody">
+                      <tr><td colspan="4" class="text-muted text-center py-3">No tasks found for this month.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Client Payments Status Table -->
+          <div class="panel mb-4">
+            <div class="panel-header">
+              <h3 class="panel-title">Client Retainers & Pending Dues</h3>
+              <span class="panel-subtitle">Expected vs received retainer fees and pending collections</span>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Client Name</th>
+                    <th>Expected</th>
+                    <th>Received</th>
+                    <th>Pending Balance</th>
+                    <th>Due Date</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="reportPaymentsBody">
+                  <tr><td colspan="6" class="text-muted text-center py-3">No client dues records.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Tool Budgets & Spending Table -->
+          <div class="panel mb-4">
+            <div class="panel-header">
+              <h3 class="panel-title">Tool Subscriptions & Budget Usage</h3>
+              <span class="panel-subtitle">Monthly software expenses, credit usage, and budget health</span>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Tool & Plan</th>
+                    <th>Monthly Cost</th>
+                    <th>Budget</th>
+                    <th>Used This Month</th>
+                    <th>Remaining</th>
+                    <th>Usage Pace</th>
+                    <th>Renewal</th>
+                  </tr>
+                </thead>
+                <tbody id="reportToolsBody">
+                  <tr><td colspan="7" class="text-muted text-center py-3">No tool records found.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ================================================================
              VIEW: ACTIVITY (Stage 4)
              ================================================================ -->
         <section id="view-activity" class="view-pane">
@@ -827,6 +1246,106 @@
         <div id="assignedTasksList" class="assigned-tasks-list">
           <!-- Dynamically populated -->
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Client Payment History Modal (Part 2) -->
+  <div id="paymentHistoryModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <h3 class="modal-title" id="historyClientTitle">Payment History</h3>
+          <span class="modal-subtitle">Past monthly retainer payments and balances</span>
+        </div>
+        <button type="button" class="modal-close-btn" id="btnClosePaymentHistory">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Month</th>
+                <th>Expected</th>
+                <th>Received</th>
+                <th>Balance</th>
+                <th>Date</th>
+                <th>Method</th>
+                <th>Note</th>
+              </tr>
+            </thead>
+            <tbody id="paymentHistoryTableBody">
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tool Add Usage Modal (Part 3) -->
+  <div id="toolUsageModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <h3 class="modal-title" id="toolUsageTitle">Log Tool Usage</h3>
+          <span class="modal-subtitle">Add daily or incremental usage</span>
+        </div>
+        <button type="button" class="modal-close-btn" id="btnCloseToolUsage">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="toolUsageForm">
+          <input type="hidden" id="usageToolId" value="" />
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label for="usageDate" class="field-label">Date *</label>
+              <input type="date" id="usageDate" class="form-input" required />
+            </div>
+            <div class="form-group flex-1">
+              <label for="usageAmount" class="field-label">Amount Used (<span id="usageUnitLabel">USD</span>) *</label>
+              <input type="number" id="usageAmount" class="form-input" step="0.1" min="0" required />
+            </div>
+          </div>
+          <div class="form-group mt-3">
+            <label for="usageNote" class="field-label">Usage Note / Purpose</label>
+            <input type="text" id="usageNote" class="form-input" placeholder="e.g. Batch image generation, client demo run" />
+          </div>
+          <div class="form-actions mt-3">
+            <button type="submit" class="btn btn-primary btn-sm" id="btnSaveUsage">Save usage</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btnCancelUsage">Cancel</button>
+          </div>
+          <div id="toolUsageError" class="form-error mt-2 hidden"></div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tool Set Total Usage Modal (Part 3) -->
+  <div id="toolSetTotalModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <h3 class="modal-title" id="toolSetTotalTitle">Set Total Used this Month</h3>
+          <span class="modal-subtitle">Directly set the cumulative usage count for current month</span>
+        </div>
+        <button type="button" class="modal-close-btn" id="btnCloseToolSetTotal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <form id="toolSetTotalForm">
+          <input type="hidden" id="setTotalToolId" value="" />
+          <div class="form-group">
+            <label for="setTotalAmount" class="field-label">Total Used So Far this Month (<span id="setTotalUnitLabel">USD</span>) *</label>
+            <input type="number" id="setTotalAmount" class="form-input" step="0.1" min="0" required />
+          </div>
+          <div class="form-group mt-3">
+            <label for="setTotalNote" class="field-label">Adjustment Note</label>
+            <input type="text" id="setTotalNote" class="form-input" placeholder="e.g. Synced from vendor dashboard billing page" />
+          </div>
+          <div class="form-actions mt-3">
+            <button type="submit" class="btn btn-primary btn-sm" id="btnSaveSetTotal">Update total</button>
+            <button type="button" class="btn btn-secondary btn-sm" id="btnCancelSetTotal">Cancel</button>
+          </div>
+          <div id="toolSetTotalError" class="form-error mt-2 hidden"></div>
+        </form>
       </div>
     </div>
   </div>

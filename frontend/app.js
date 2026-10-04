@@ -28,6 +28,14 @@ const VIEW_METADATA = {
     title: "Money",
     description: "Track monthly income, software expenses, and net margin."
   },
+  notifications: {
+    title: "Notification Center",
+    description: "Team assignments, comments, tool renewals, and billing reminders."
+  },
+  report: {
+    title: "Monthly Report",
+    description: "Executive monthly overview, tasks breakdown, payments, and AI summary."
+  },
   activity: {
     title: "Activity",
     description: "Audit log of recent team actions and status updates."
@@ -52,6 +60,9 @@ const state = {
   toolsData: [],
   notifications: [],
   unreadNotificationsCount: 0,
+  notificationsCenterData: [],
+  unreadCenterCount: 0,
+  notificationsFilter: "all",
   appInitialized: false
 };
 
@@ -134,6 +145,10 @@ function navigateTo(viewName) {
     loadFinances();
   } else if (viewName === "activity") {
     loadActivityFeed();
+  } else if (viewName === "notifications") {
+    loadNotificationsCenter();
+  } else if (viewName === "report") {
+    if (typeof loadReportView === "function") loadReportView();
   } else if (viewName === "inbox") {
     loadClients();
   }
@@ -191,6 +206,7 @@ function renderMemberSelect() {
   updateActiveMemberDisplay();
   if (state.activeMemberId) {
     loadNotifications(state.activeMemberId);
+    loadNotificationsCenter();
   }
 }
 
@@ -210,6 +226,7 @@ function handleMemberChange(e) {
     localStorage.setItem("newvora_member_id", found.id);
     updateActiveMemberDisplay();
     loadNotifications(found.id);
+    loadNotificationsCenter();
   }
 }
 
@@ -364,6 +381,228 @@ async function handleMarkNotificationRead(notificationId) {
     await loadNotifications(state.activeMemberId);
   } catch (err) {
     console.error("Error marking notification read:", err);
+  }
+}
+
+// ==============================================================================
+// Stage 8 Part 4: Centralized Notification Center
+// ==============================================================================
+async function loadNotificationsCenter() {
+  const memberId = state.activeMemberId;
+  const accessCode = getStoredAccessCode();
+
+  try {
+    const url = memberId ? `/api/notifications-center?member_id=${memberId}` : `/api/notifications-center`;
+    const res = await fetch(url, {
+      headers: {
+        "X-Access-Code": accessCode
+      }
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    state.notificationsCenterData = data.notifications || [];
+    state.unreadCenterCount = data.unread_count || 0;
+
+    // Update bell badge
+    const bellBadge = document.getElementById("bellUnreadBadge");
+    if (bellBadge) {
+      if (data.unread_count > 0) {
+        bellBadge.textContent = data.unread_count;
+        bellBadge.classList.remove("hidden");
+      } else {
+        bellBadge.classList.add("hidden");
+      }
+    }
+
+    if (state.currentView === "notifications") {
+      renderNotificationsCenter();
+    }
+  } catch (err) {
+    console.error("Error loading notification center:", err);
+  }
+}
+
+function renderNotificationsCenter() {
+  const listEl = document.getElementById("notificationsList");
+  const emptyEl = document.getElementById("notificationsEmptyState");
+  const subheader = document.getElementById("notificationsSubheader");
+  if (!listEl) return;
+
+  if (subheader) {
+    subheader.textContent = `Updates, task alerts, tool renewals, and payment reminders for ${state.activeMemberName}`;
+  }
+
+  let items = state.notificationsCenterData || [];
+  if (state.notificationsFilter === "unread") {
+    items = items.filter((n) => !n.is_read);
+  }
+
+  if (items.length === 0) {
+    listEl.innerHTML = "";
+    if (emptyEl) emptyEl.classList.remove("hidden");
+    return;
+  }
+
+  if (emptyEl) emptyEl.classList.add("hidden");
+  listEl.innerHTML = "";
+
+  items.forEach((item) => {
+    const card = document.createElement("div");
+    card.className = `notification-card ${!item.is_read ? "is-unread" : ""}`;
+
+    let typeBadge = "badge-status";
+    let typeLabel = item.type;
+    if (item.type === "assignment") {
+      typeBadge = "badge-type";
+      typeLabel = "Assignment";
+    } else if (item.type === "comment") {
+      typeBadge = "badge-status";
+      typeLabel = "Comment";
+    } else if (item.type === "status_change") {
+      typeBadge = "badge-status";
+      typeLabel = "Status Change";
+    } else if (item.type === "tool_renewal") {
+      typeBadge = "badge-warning";
+      typeLabel = "Tool Renewal";
+    } else if (item.type === "tool_budget") {
+      typeBadge = "badge-danger";
+      typeLabel = "Tool Budget";
+    } else if (item.type === "client_payment") {
+      typeBadge = "badge-overdue";
+      typeLabel = "Client Overdue";
+    } else if (item.type === "month_end") {
+      typeBadge = "badge-overdue";
+      typeLabel = "Month End";
+    }
+
+    card.innerHTML = `
+      <div class="notification-body">
+        <div class="notification-text">${escapeHtml(item.text)}</div>
+        <div class="notification-meta">
+          <span class="badge ${typeBadge}">${escapeHtml(typeLabel)}</span>
+          <span>${formatDate(item.created_at)}</span>
+          ${item.link_type ? `<span class="text-primary" style="font-weight: 700; cursor: pointer;">View ${escapeHtml(item.link_type)} &rarr;</span>` : ""}
+        </div>
+      </div>
+      <div class="notification-actions" style="display: flex; align-items: center; gap: 8px;">
+        ${!item.is_read ? `
+          <button type="button" class="btn btn-secondary btn-sm btn-mark-center-read" data-id="${item.id}">
+            Mark as read
+          </button>
+        ` : `
+          <span class="badge badge-status" style="font-size: 10px; color: var(--text-muted);">Read</span>
+        `}
+      </div>
+    `;
+
+    // Mark as read button
+    const btnMark = card.querySelector(".btn-mark-center-read");
+    if (btnMark) {
+      btnMark.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await handleMarkCenterNotificationRead(item.id);
+      });
+    }
+
+    // Clicking notification opens the related task, client, or tool page
+    card.addEventListener("click", async () => {
+      if (!item.is_read) {
+        await handleMarkCenterNotificationRead(item.id, false);
+      }
+      if (item.link_type === "task") {
+        navigateTo("board");
+        setTimeout(() => {
+          const taskEl = document.getElementById(`task-card-${item.link_id}`);
+          if (taskEl) {
+            taskEl.scrollIntoView({ behavior: "smooth", block: "center" });
+            taskEl.style.boxShadow = "0 0 0 3px rgba(46, 139, 122, 0.4)";
+            setTimeout(() => { taskEl.style.boxShadow = ""; }, 2500);
+            if (item.type === "comment") {
+              toggleCommentsDrawer(item.link_id);
+            }
+          }
+        }, 300);
+      } else if (item.link_type === "tool") {
+        navigateTo("tools");
+      } else if (item.link_type === "dues" || item.link_type === "client") {
+        navigateTo("dues");
+      }
+    });
+
+    listEl.appendChild(card);
+  });
+}
+
+async function handleMarkCenterNotificationRead(notifId, refreshView = true) {
+  try {
+    const res = await fetch(`/api/notifications-center/${notifId}/read`, {
+      method: "PATCH",
+      headers: {
+        "X-Access-Code": getStoredAccessCode()
+      }
+    });
+    if (!res.ok) throw new Error("Failed to mark read");
+    if (refreshView) {
+      await loadNotificationsCenter();
+    }
+  } catch (err) {
+    console.error("Error marking notification read:", err);
+  }
+}
+
+async function handleMarkAllCenterNotificationsRead() {
+  const memberId = state.activeMemberId;
+  const url = memberId ? `/api/notifications-center/mark-all-read?member_id=${memberId}` : `/api/notifications-center/mark-all-read`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "X-Access-Code": getStoredAccessCode()
+      }
+    });
+    if (!res.ok) throw new Error("Failed to mark all read");
+    await loadNotificationsCenter();
+  } catch (err) {
+    alert("Error: " + err.message);
+  }
+}
+
+function setupNotificationsCenterHandlers() {
+  const bellBtn = document.getElementById("btnNotificationsBell");
+  if (bellBtn) {
+    bellBtn.addEventListener("click", () => {
+      navigateTo("notifications");
+    });
+  }
+
+  const btnAll = document.getElementById("btnFilterNotifsAll");
+  const btnUnread = document.getElementById("btnFilterNotifsUnread");
+  const btnMarkAll = document.getElementById("btnMarkAllNotifsRead");
+
+  if (btnAll) {
+    btnAll.addEventListener("click", () => {
+      state.notificationsFilter = "all";
+      btnAll.classList.remove("btn-secondary");
+      btnAll.classList.add("btn-primary");
+      btnUnread?.classList.remove("btn-primary");
+      btnUnread?.classList.add("btn-secondary");
+      renderNotificationsCenter();
+    });
+  }
+
+  if (btnUnread) {
+    btnUnread.addEventListener("click", () => {
+      state.notificationsFilter = "unread";
+      btnUnread.classList.remove("btn-secondary");
+      btnUnread.classList.add("btn-primary");
+      btnAll?.classList.remove("btn-primary");
+      btnAll?.classList.add("btn-secondary");
+      renderNotificationsCenter();
+    });
+  }
+
+  if (btnMarkAll) {
+    btnMarkAll.addEventListener("click", handleMarkAllCenterNotificationsRead);
   }
 }
 
@@ -1062,6 +1301,142 @@ function setupBoardFilterHandlers() {
   if (btnRefresh) {
     btnRefresh.addEventListener("click", loadBoard);
   }
+
+  setupManualTaskHandlers();
+}
+
+function setupManualTaskHandlers() {
+  const btnOpen = document.getElementById("btnOpenNewTask");
+  const card = document.getElementById("newTaskCard");
+  const btnCancel = document.getElementById("btnCancelNewTask");
+  const form = document.getElementById("newTaskForm");
+  const clientSelect = document.getElementById("newTaskClientSelect");
+  const assigneeSelect = document.getElementById("newTaskAssigneeSelect");
+  const errorDiv = document.getElementById("newTaskError");
+
+  function populateNewTaskDropdowns() {
+    if (clientSelect) {
+      const curClient = clientSelect.value;
+      clientSelect.innerHTML = '<option value="" disabled selected>Select client...</option>';
+      state.clients.forEach((c) => {
+        const opt = document.createElement("option");
+        opt.value = c.id;
+        opt.textContent = `${c.name} (${c.company})`;
+        if (curClient && String(c.id) === String(curClient)) opt.selected = true;
+        clientSelect.appendChild(opt);
+      });
+      if (!clientSelect.value && state.clients.length > 0) {
+        clientSelect.value = state.clients[0].id;
+      }
+    }
+
+    if (assigneeSelect) {
+      assigneeSelect.innerHTML = '<option value="">Unassigned</option>';
+      state.members.forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m.id;
+        opt.textContent = m.name;
+        if (m.id === state.activeMemberId) opt.selected = true;
+        assigneeSelect.appendChild(opt);
+      });
+    }
+  }
+
+  if (btnOpen) {
+    btnOpen.addEventListener("click", () => {
+      populateNewTaskDropdowns();
+      if (card) {
+        card.classList.remove("hidden");
+        document.getElementById("newTaskTitleInput")?.focus();
+      }
+      if (errorDiv) errorDiv.classList.add("hidden");
+    });
+  }
+
+  if (btnCancel) {
+    btnCancel.addEventListener("click", () => {
+      if (card) card.classList.add("hidden");
+      if (errorDiv) errorDiv.classList.add("hidden");
+    });
+  }
+
+  if (form) {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const clientId = parseInt(document.getElementById("newTaskClientSelect").value, 10);
+      const title = document.getElementById("newTaskTitleInput").value.trim();
+      const description = document.getElementById("newTaskDescriptionInput").value.trim();
+      const reqType = document.getElementById("newTaskTypeSelect").value;
+      const priority = document.getElementById("newTaskPrioritySelect").value;
+      const assigneeVal = document.getElementById("newTaskAssigneeSelect").value;
+      const assignedMemberId = assigneeVal ? parseInt(assigneeVal, 10) : null;
+
+      if (!clientId) {
+        if (errorDiv) {
+          errorDiv.textContent = "Please select a client.";
+          errorDiv.classList.remove("hidden");
+        }
+        return;
+      }
+
+      if (!title) {
+        if (errorDiv) {
+          errorDiv.textContent = "Please enter a task title.";
+          errorDiv.classList.remove("hidden");
+        }
+        return;
+      }
+
+      const saveBtn = document.getElementById("btnSaveNewTask");
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saving...";
+      }
+
+      try {
+        if (errorDiv) errorDiv.classList.add("hidden");
+        const res = await fetch("/api/tasks", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Access-Code": getStoredAccessCode()
+          },
+          body: JSON.stringify({
+            client_id: clientId,
+            title: title,
+            description: description,
+            request_type: reqType,
+            priority: priority,
+            status: "todo",
+            assigned_member_id: assignedMemberId,
+            creator_name: state.activeMemberName || "Team"
+          })
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || "Failed to create task.");
+        }
+
+        form.reset();
+        if (card) card.classList.add("hidden");
+        await loadBoardTasks();
+        if (state.activeMemberId) {
+          await loadNotifications(state.activeMemberId);
+        }
+      } catch (err) {
+        if (errorDiv) {
+          errorDiv.textContent = err.message;
+          errorDiv.classList.remove("hidden");
+        }
+      } finally {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = "Save task";
+        }
+      }
+    });
+  }
 }
 
 // ==============================================================================
@@ -1105,6 +1480,17 @@ async function loadFinances() {
 
     const marginPct = data.total_income > 0 ? ((data.net_margin / data.total_income) * 100).toFixed(0) : 0;
     document.getElementById("metricMarginPct").textContent = `${marginPct}% net margin`;
+
+    // Render Month-end Reminder Banner (Part 2)
+    const moneyBanner = document.getElementById("moneyMonthEndBanner");
+    if (moneyBanner) {
+      if (data.month_end_reminder && data.month_end_reminder.show_banner) {
+        moneyBanner.innerHTML = `<span class="month-end-banner-icon">&#9888;</span><span>${escapeHtml(data.month_end_reminder.banner_message)}</span>`;
+        moneyBanner.classList.remove("hidden");
+      } else {
+        moneyBanner.classList.add("hidden");
+      }
+    }
 
     // Render Money page summary strip (Stage 7)
     renderMoneySummaryStrip(data.summary_strip);
@@ -1453,6 +1839,30 @@ async function loadDuesView() {
     const data = await res.json();
     state.duesData = data;
 
+    // Populate month options dynamically
+    if (monthSelect && data.available_months && data.available_months.length > 0) {
+      const cur = data.month || selectedMonth;
+      monthSelect.innerHTML = "";
+      data.available_months.forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m;
+        opt.textContent = m;
+        if (m === cur) opt.selected = true;
+        monthSelect.appendChild(opt);
+      });
+    }
+
+    // Render Month-end Reminder Banner (Part 2)
+    const duesBanner = document.getElementById("duesMonthEndBanner");
+    if (duesBanner) {
+      if (data.reminder && data.reminder.show_banner) {
+        duesBanner.innerHTML = `<span class="month-end-banner-icon">&#9888;</span><span>${escapeHtml(data.reminder.banner_message)}</span>`;
+        duesBanner.classList.remove("hidden");
+      } else {
+        duesBanner.classList.add("hidden");
+      }
+    }
+
     // Update KPI metrics
     const totalPendingEl = document.getElementById("duesTotalPending");
     if (totalPendingEl) {
@@ -1464,7 +1874,7 @@ async function loadDuesView() {
     let estCount = 0;
 
     (data.clients || []).forEach((c) => {
-      if (c.status === "pending" || c.status === "overdue") {
+      if (c.status === "pending" || c.status === "overdue" || c.status === "partial") {
         pendingCount++;
       }
       if (c.establishment_fee_remaining > 0) {
@@ -1475,7 +1885,7 @@ async function loadDuesView() {
 
     const pendingCountEl = document.getElementById("duesPendingCount");
     if (pendingCountEl) {
-      pendingCountEl.textContent = `${pendingCount} client${pendingCount === 1 ? "" : "s"} pending or overdue`;
+      pendingCountEl.textContent = `${pendingCount} client${pendingCount === 1 ? "" : "s"} pending, partial, or overdue`;
     }
 
     const estOutstandingEl = document.getElementById("duesTotalEstOutstanding");
@@ -1488,7 +1898,7 @@ async function loadDuesView() {
       estCountEl.textContent = `${estCount} client${estCount === 1 ? "" : "s"} with remaining balance`;
     }
 
-    renderDuesTable(data.clients || [], selectedMonth);
+    renderDuesTable(data.clients || [], data.month || selectedMonth);
   } catch (err) {
     console.error("Error loading dues:", err);
   }
@@ -1499,7 +1909,7 @@ function renderDuesTable(clients, selectedMonth) {
   if (!tbody) return;
 
   if (!clients || clients.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="text-muted text-center py-4">No clients found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="text-muted text-center py-4">No clients found.</td></tr>';
     return;
   }
 
@@ -1512,58 +1922,113 @@ function renderDuesTable(clients, selectedMonth) {
     if (c.status === "paid") {
       statusBadgeClass = "badge-paid";
       statusLabel = "PAID";
+    } else if (c.status === "partial") {
+      statusBadgeClass = "badge-partial";
+      statusLabel = "PARTIAL";
     } else if (c.status === "overdue") {
       statusBadgeClass = "badge-overdue";
       statusLabel = "OVERDUE";
     }
-
-    const estText = c.establishment_fee_total > 0
-      ? `$${c.establishment_fee_paid.toFixed(0)} / $${c.establishment_fee_total.toFixed(0)} <span class="text-muted" style="font-size: 11px;">($${c.establishment_fee_remaining.toFixed(0)} remaining)</span>`
-      : '<span class="text-muted">-</span>';
 
     tr.innerHTML = `
       <td>
         <strong>${escapeHtml(c.name)}</strong>
         <div class="card-meta mt-1 text-muted">${escapeHtml(c.company)}</div>
       </td>
-      <td><strong>$${c.monthly_fee.toFixed(0)}/mo</strong></td>
+      <td><strong>$${c.amount_expected.toFixed(0)}</strong></td>
+      <td><strong>$${c.amount_received.toFixed(0)}</strong></td>
+      <td><strong class="${c.balance > 0 ? "metric-expense" : ""}">${c.balance > 0 ? "$" + c.balance.toFixed(0) : "$0"}</strong></td>
       <td>
         <div>Day ${c.billing_day}</div>
         <div class="text-muted" style="font-size: 11px;">Due: ${c.due_date}</div>
       </td>
       <td><span class="badge ${statusBadgeClass}">${statusLabel}</span></td>
-      <td>${estText}</td>
       <td class="text-right">
-        ${c.status === "paid"
-          ? `<button type="button" class="btn btn-secondary btn-sm" disabled style="opacity: 0.6;">Paid</button>`
-          : `<button type="button" class="btn btn-primary btn-sm btn-mark-monthly-paid" data-id="${c.client_id}">Mark paid</button>`
-        }
-        ${c.establishment_fee_remaining > 0
-          ? `<button type="button" class="btn btn-subtle btn-sm btn-mark-est-paid ml-1" data-id="${c.client_id}">Pay est. fee</button>`
-          : ""
-        }
+        <button type="button" class="btn btn-primary btn-sm btn-open-payment" data-id="${c.client_id}">
+          Record payment
+        </button>
+        <button type="button" class="btn btn-secondary btn-sm btn-view-history ml-1" data-id="${c.client_id}">
+          History (${(c.history || []).length})
+        </button>
       </td>
     `;
 
-    const btnMonthly = tr.querySelector(".btn-mark-monthly-paid");
-    if (btnMonthly) {
-      btnMonthly.addEventListener("click", () => handleMarkDuePaid(c.client_id, "monthly", selectedMonth));
+    const btnPay = tr.querySelector(".btn-open-payment");
+    if (btnPay) {
+      btnPay.addEventListener("click", () => openRecordPaymentForm(c, selectedMonth));
     }
 
-    const btnEst = tr.querySelector(".btn-mark-est-paid");
-    if (btnEst) {
-      btnEst.addEventListener("click", () => handleMarkDuePaid(c.client_id, "establishment", selectedMonth));
+    const btnHistory = tr.querySelector(".btn-view-history");
+    if (btnHistory) {
+      btnHistory.addEventListener("click", () => openPaymentHistoryModal(c));
     }
 
     tbody.appendChild(tr);
   });
 }
 
+function openRecordPaymentForm(client, selectedMonth) {
+  const card = document.getElementById("duesPaymentCard");
+  const form = document.getElementById("duesPaymentForm");
+  const errEl = document.getElementById("duesPaymentError");
+  if (!card) return;
+
+  document.getElementById("paymentClientId").value = client.client_id;
+  document.getElementById("paymentClientName").value = client.name;
+  document.getElementById("paymentMonth").value = selectedMonth;
+  document.getElementById("paymentAmountExpected").value = client.amount_expected;
+  document.getElementById("paymentAmountReceived").value = client.amount_received || client.amount_expected;
+  document.getElementById("paymentDateReceived").value = client.date_received || new Date().toISOString().slice(0, 10);
+  document.getElementById("paymentMethod").value = client.method || "UPI";
+  document.getElementById("paymentNote").value = client.note || "";
+
+  if (errEl) errEl.classList.add("hidden");
+  card.classList.remove("hidden");
+  card.scrollIntoView({ behavior: "smooth", block: "start" });
+  document.getElementById("paymentAmountReceived")?.focus();
+}
+
+function openPaymentHistoryModal(client) {
+  const modal = document.getElementById("paymentHistoryModal");
+  const title = document.getElementById("historyClientTitle");
+  const tbody = document.getElementById("paymentHistoryTableBody");
+  if (!modal || !tbody) return;
+
+  if (title) title.textContent = `Payment History: ${client.name}`;
+
+  const history = client.history || [];
+  if (history.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="text-muted text-center py-4">No past payment entries found.</td></tr>';
+  } else {
+    tbody.innerHTML = history.map((p) => {
+      const exp = Number(p.amount_expected || 0);
+      const rec = Number(p.amount_received || 0);
+      const bal = Math.max(0, exp - rec);
+      return `
+        <tr>
+          <td><span class="badge badge-status">${escapeHtml(p.month)}</span></td>
+          <td><strong>$${exp.toFixed(0)}</strong></td>
+          <td><strong>$${rec.toFixed(0)}</strong></td>
+          <td><strong class="${bal > 0 ? "metric-expense" : ""}">${bal > 0 ? "$" + bal.toFixed(0) : "$0"}</strong></td>
+          <td>${escapeHtml(p.date_received || "-")}</td>
+          <td><span class="badge badge-type">${escapeHtml(p.method || "-")}</span></td>
+          <td><span class="text-muted">${escapeHtml(p.note || "-")}</span></td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  modal.classList.remove("hidden");
+}
+
 async function handleMarkDuePaid(clientId, feeType, month) {
   try {
     const res = await fetch("/api/dues/mark-paid", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Access-Code": getStoredAccessCode()
+      },
       body: JSON.stringify({
         client_id: clientId,
         fee_type: feeType,
@@ -1607,7 +2072,7 @@ function renderToolsTable(tools) {
   if (!tbody) return;
 
   if (!tools || tools.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="7" class="text-muted text-center py-4">No software tools recorded.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="text-muted text-center py-4">No software tools recorded.</td></tr>';
     return;
   }
 
@@ -1615,24 +2080,71 @@ function renderToolsTable(tools) {
   tools.forEach((t) => {
     const tr = document.createElement("tr");
 
-    let statusBadge = "badge-status";
-    if (t.is_warning) {
-      statusBadge = "badge-warning";
+    const clampedPct = Math.min(100, Math.max(0, t.percent_used || 0));
+    let fillClass = "";
+    if (t.runs_out_early || t.percent_used >= 100) {
+      fillClass = "danger";
+    } else if (t.percent_used >= 80) {
+      fillClass = "warning";
     }
 
+    const warningsHtml = (t.warning_labels && t.warning_labels.length > 0)
+      ? t.warning_labels.map((w) => {
+          const badgeClass = (w.includes("Runs out") || w.includes("overdue")) ? "badge-danger" : "badge-warning";
+          return `<span class="badge ${badgeClass}" style="display: block; margin-bottom: 3px;">${escapeHtml(w)}</span>`;
+        }).join("")
+      : '<span class="badge badge-paid">On track</span>';
+
     tr.innerHTML = `
-      <td><strong>${escapeHtml(t.name)}</strong></td>
-      <td><strong>$${Number(t.monthly_cost).toFixed(0)}/mo</strong></td>
-      <td>${escapeHtml(t.renewal_date)}</td>
-      <td><span class="badge ${statusBadge}">${escapeHtml(t.renewal_status)}</span></td>
-      <td>${escapeHtml(t.owner_name || "Team")}</td>
-      <td><span class="text-muted">${escapeHtml(t.notes || "-")}</span></td>
-      <td class="text-right">
-        <button type="button" class="btn btn-secondary btn-sm btn-record-tool-payment" data-id="${t.id}" data-name="${escapeHtml(t.name)}">
-          Record payment
-        </button>
+      <td>
+        <strong>${escapeHtml(t.name)}</strong>
+        <div class="text-muted" style="font-size: 11px;">${escapeHtml(t.plan_name || "Standard")} &bull; ${escapeHtml(t.owner_name || "Team")}</div>
+      </td>
+      <td>
+        <strong>${t.budget_amount} ${escapeHtml(t.unit)}</strong>
+        <div class="text-muted" style="font-size: 11px;">$${Number(t.monthly_cost).toFixed(0)}/mo</div>
+      </td>
+      <td>
+        <div><strong>Used:</strong> ${t.used_this_month} ${escapeHtml(t.unit)}</div>
+        <div class="text-muted" style="font-size: 11px;"><strong>Left:</strong> ${t.amount_left} ${escapeHtml(t.unit)}</div>
+      </td>
+      <td>
+        <div class="tool-budget-bar" title="${t.percent_used}% used">
+          <div class="tool-budget-fill ${fillClass}" style="width: ${clampedPct}%;"></div>
+        </div>
+        <div style="font-size: 10px; color: var(--text-muted); text-align: right; margin-top: 3px;">
+          ${t.percent_used}% used
+        </div>
+      </td>
+      <td>
+        <div>${t.daily_pace} ${escapeHtml(t.unit)}/day</div>
+        <div class="text-muted" style="font-size: 11px;">Allow: ${t.average_allowed_per_day}/day</div>
+      </td>
+      <td>
+        <div>${escapeHtml(t.renewal_date)} (${t.days_until_renewal}d)</div>
+        <div class="text-muted" style="font-size: 11px;">Run-out: ${escapeHtml(t.projected_runout_date)}</div>
+      </td>
+      <td>
+        ${warningsHtml}
+      </td>
+      <td class="text-right" style="white-space: nowrap;">
+        <div style="display: inline-flex; gap: 4px; align-items: center; justify-content: flex-end;">
+          <button type="button" class="btn btn-primary btn-sm btn-open-tool-usage" data-id="${t.id}">+ Usage</button>
+          <button type="button" class="btn btn-secondary btn-sm btn-open-set-total" data-id="${t.id}">Set total</button>
+          <button type="button" class="btn btn-secondary btn-sm btn-record-tool-payment" data-id="${t.id}">Pay</button>
+        </div>
       </td>
     `;
+
+    const btnUsage = tr.querySelector(".btn-open-tool-usage");
+    if (btnUsage) {
+      btnUsage.addEventListener("click", () => openToolUsageModal(t));
+    }
+
+    const btnSetTotal = tr.querySelector(".btn-open-set-total");
+    if (btnSetTotal) {
+      btnSetTotal.addEventListener("click", () => openToolSetTotalModal(t));
+    }
 
     const btnPay = tr.querySelector(".btn-record-tool-payment");
     if (btnPay) {
@@ -1643,12 +2155,52 @@ function renderToolsTable(tools) {
   });
 }
 
+function openToolUsageModal(tool) {
+  const modal = document.getElementById("toolUsageModal");
+  if (!modal) return;
+  document.getElementById("usageToolId").value = tool.id;
+  document.getElementById("toolUsageTitle").textContent = `Log Usage: ${tool.name}`;
+  document.getElementById("usageUnitLabel").textContent = tool.unit || "USD";
+  document.getElementById("usageDate").value = new Date().toISOString().slice(0, 10);
+  document.getElementById("usageAmount").value = "";
+  document.getElementById("usageNote").value = "";
+  document.getElementById("toolUsageError")?.classList.add("hidden");
+  modal.classList.remove("hidden");
+  document.getElementById("usageAmount")?.focus();
+}
+
+function openToolSetTotalModal(tool) {
+  const modal = document.getElementById("toolSetTotalModal");
+  if (!modal) return;
+  document.getElementById("setTotalToolId").value = tool.id;
+  document.getElementById("toolSetTotalTitle").textContent = `Set Month Usage: ${tool.name}`;
+  document.getElementById("setTotalUnitLabel").textContent = tool.unit || "USD";
+  document.getElementById("setTotalAmount").value = tool.used_this_month || 0;
+  document.getElementById("setTotalNote").value = "Adjusted cumulative monthly total";
+  document.getElementById("toolSetTotalError")?.classList.add("hidden");
+  modal.classList.remove("hidden");
+  document.getElementById("setTotalAmount")?.focus();
+}
+
 async function handleRecordToolPayment(toolId, toolName) {
+  if (!confirm(`Record payment for '${toolName}'? This will record the monthly subscription expense in Money and advance the renewal date by 1 month.`)) {
+    return;
+  }
+
+  const btn = document.querySelector(`.btn-record-tool-payment[data-id="${toolId}"]`);
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Paying...";
+  }
+
   try {
     const res = await fetch(`/api/tools/${toolId}/record-payment`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ creator_name: state.activeMemberName })
+      headers: {
+        "Content-Type": "application/json",
+        "X-Access-Code": getStoredAccessCode()
+      },
+      body: JSON.stringify({ creator_name: state.activeMemberName || "Team" })
     });
 
     if (!res.ok) {
@@ -1663,26 +2215,37 @@ async function handleRecordToolPayment(toolId, toolName) {
     await loadActivityFeed();
   } catch (err) {
     alert("Error: " + err.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Pay";
+    }
   }
 }
 
 async function handleSaveNewTool(e) {
   e.preventDefault();
   const nameInput = document.getElementById("toolFormName");
+  const planInput = document.getElementById("toolFormPlan");
   const costInput = document.getElementById("toolFormCost");
+  const budgetInput = document.getElementById("toolFormBudget");
+  const unitInput = document.getElementById("toolFormUnit");
   const renewalInput = document.getElementById("toolFormRenewal");
   const ownerInput = document.getElementById("toolFormOwner");
   const notesInput = document.getElementById("toolFormNotes");
   const errorDiv = document.getElementById("toolFormError");
 
   const name = nameInput.value.trim();
+  const plan_name = (planInput ? planInput.value.trim() : "") || "Standard";
   const monthly_cost = parseFloat(costInput.value) || 0;
+  const budget_amount = parseFloat(budgetInput ? budgetInput.value : 0) || 0;
+  const unit = (unitInput ? unitInput.value.trim() : "USD") || "USD";
   const renewal_date = renewalInput.value.trim();
   const owner_name = ownerInput.value.trim() || state.activeMemberName;
   const notes = notesInput.value.trim();
 
-  if (!name || monthly_cost <= 0 || !renewal_date) {
-    errorDiv.textContent = "Please provide name, positive monthly cost, and renewal date.";
+  if (!name || !renewal_date) {
+    errorDiv.textContent = "Please provide tool name and renewal date.";
     errorDiv.classList.remove("hidden");
     return;
   }
@@ -1691,9 +2254,15 @@ async function handleSaveNewTool(e) {
     errorDiv.classList.add("hidden");
     const res = await fetch("/api/tools", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "X-Access-Code": getStoredAccessCode()
+      },
       body: JSON.stringify({
         name,
+        plan_name,
+        budget_amount,
+        unit,
         monthly_cost,
         renewal_date,
         owner_name,
@@ -1713,6 +2282,144 @@ async function handleSaveNewTool(e) {
   } catch (err) {
     errorDiv.textContent = err.message;
     errorDiv.classList.remove("hidden");
+  }
+}
+
+function setupToolUsageHandlers() {
+  const usageModal = document.getElementById("toolUsageModal");
+  const btnCloseUsage = document.getElementById("btnCloseToolUsage");
+  const btnCancelUsage = document.getElementById("btnCancelUsage");
+  const usageForm = document.getElementById("toolUsageForm");
+  const usageErr = document.getElementById("toolUsageError");
+
+  const setTotalModal = document.getElementById("toolSetTotalModal");
+  const btnCloseSetTotal = document.getElementById("btnCloseToolSetTotal");
+  const btnCancelSetTotal = document.getElementById("btnCancelSetTotal");
+  const setTotalForm = document.getElementById("toolSetTotalForm");
+  const setTotalErr = document.getElementById("toolSetTotalError");
+
+  [btnCloseUsage, btnCancelUsage].forEach((btn) => {
+    btn?.addEventListener("click", () => usageModal?.classList.add("hidden"));
+  });
+
+  [btnCloseSetTotal, btnCancelSetTotal].forEach((btn) => {
+    btn?.addEventListener("click", () => setTotalModal?.classList.add("hidden"));
+  });
+
+  if (usageModal) {
+    usageModal.addEventListener("click", (e) => {
+      if (e.target === usageModal) usageModal.classList.add("hidden");
+    });
+  }
+
+  if (setTotalModal) {
+    setTotalModal.addEventListener("click", (e) => {
+      if (e.target === setTotalModal) setTotalModal.classList.add("hidden");
+    });
+  }
+
+  if (usageForm) {
+    usageForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const toolId = parseInt(document.getElementById("usageToolId").value, 10);
+      const date = document.getElementById("usageDate").value.trim();
+      const amountUsed = parseFloat(document.getElementById("usageAmount").value) || 0;
+      const note = document.getElementById("usageNote").value.trim();
+
+      const btn = document.getElementById("btnSaveUsage");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Saving...";
+      }
+
+      try {
+        if (usageErr) usageErr.classList.add("hidden");
+        const res = await fetch(`/api/tools/${toolId}/usage`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Access-Code": getStoredAccessCode()
+          },
+          body: JSON.stringify({
+            tool_id: toolId,
+            date: date,
+            amount_used: amountUsed,
+            note: note,
+            creator_name: state.activeMemberName || "Team"
+          })
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || "Failed to log tool usage.");
+        }
+
+        usageModal.classList.add("hidden");
+        await loadToolsView();
+        await loadActivityFeed();
+      } catch (err) {
+        if (usageErr) {
+          usageErr.textContent = err.message;
+          usageErr.classList.remove("hidden");
+        }
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Save usage";
+        }
+      }
+    });
+  }
+
+  if (setTotalForm) {
+    setTotalForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const toolId = parseInt(document.getElementById("setTotalToolId").value, 10);
+      const totalAmount = parseFloat(document.getElementById("setTotalAmount").value) || 0;
+      const note = document.getElementById("setTotalNote").value.trim();
+
+      const btn = document.getElementById("btnSaveSetTotal");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "Updating...";
+      }
+
+      try {
+        if (setTotalErr) setTotalErr.classList.add("hidden");
+        const res = await fetch(`/api/tools/${toolId}/set-total-usage`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Access-Code": getStoredAccessCode()
+          },
+          body: JSON.stringify({
+            tool_id: toolId,
+            total_amount_used: totalAmount,
+            note: note,
+            creator_name: state.activeMemberName || "Team"
+          })
+        });
+
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.detail || "Failed to update total usage.");
+        }
+
+        setTotalModal.classList.add("hidden");
+        await loadToolsView();
+        await loadActivityFeed();
+      } catch (err) {
+        if (setTotalErr) {
+          setTotalErr.textContent = err.message;
+          setTotalErr.classList.remove("hidden");
+        }
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "Update total";
+        }
+      }
+    });
   }
 }
 
@@ -1776,6 +2483,601 @@ function setupStage7Handlers() {
     modal.addEventListener("click", (e) => {
       if (e.target === modal) {
         modal.classList.add("hidden");
+      }
+    });
+  }
+
+  setupDuesPaymentHandlers();
+  setupToolUsageHandlers();
+  setupReceiptReaderHandlers();
+}
+
+// ==============================================================================
+// Stage 8 Part 5: Tool Receipt Reader Handlers
+// ==============================================================================
+function setupReceiptReaderHandlers() {
+  const btnToggle = document.getElementById("btnToggleReceiptReader");
+  const card = document.getElementById("receiptReaderCard");
+  const btnCancel = document.getElementById("btnCancelReceipt");
+  const btnParse = document.getElementById("btnParseReceipt");
+  const textInput = document.getElementById("receiptTextInput");
+  const loadingEl = document.getElementById("receiptLoading");
+  const errorEl = document.getElementById("receiptError");
+  const resultCard = document.getElementById("receiptResultCard");
+  const saveForm = document.getElementById("receiptSaveForm");
+  const saveSuccess = document.getElementById("receiptSaveSuccess");
+  const saveBtn = document.getElementById("btnSaveReceiptTool");
+
+  if (btnToggle && card) {
+    btnToggle.addEventListener("click", () => {
+      card.classList.toggle("hidden");
+      if (!card.classList.contains("hidden")) {
+        textInput?.focus();
+      }
+    });
+  }
+
+  if (btnCancel && card) {
+    btnCancel.addEventListener("click", () => {
+      card.classList.add("hidden");
+      if (errorEl) errorEl.classList.add("hidden");
+      if (resultCard) resultCard.classList.add("hidden");
+    });
+  }
+
+  if (btnParse) {
+    btnParse.addEventListener("click", async () => {
+      const text = textInput ? textInput.value.trim() : "";
+      if (!text) {
+        if (errorEl) {
+          errorEl.textContent = "Please paste the subscription email or invoice text.";
+          errorEl.classList.remove("hidden");
+        }
+        return;
+      }
+
+      btnParse.disabled = true;
+      btnParse.textContent = "Extracting...";
+      if (loadingEl) loadingEl.classList.remove("hidden");
+      if (errorEl) errorEl.classList.add("hidden");
+      if (resultCard) resultCard.classList.add("hidden");
+
+      try {
+        const res = await fetch("/api/ai/parse-receipt", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Access-Code": getStoredAccessCode()
+          },
+          body: JSON.stringify({ receipt_text: text })
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || "Failed to extract tool details.");
+        }
+
+        const data = await res.json();
+
+        // Populate form
+        document.getElementById("receiptToolName").value = data.tool_name || "";
+        document.getElementById("receiptPlanName").value = data.plan_name || "Standard";
+        document.getElementById("receiptAmount").value = data.amount || 0;
+        document.getElementById("receiptUnit").value = data.currency || "USD";
+        document.getElementById("receiptRenewalDate").value = data.renewal_date || "";
+        document.getElementById("receiptOwner").value = state.activeMemberName || "Team";
+        document.getElementById("receiptNotes").value = data.notes || "";
+
+        if (resultCard) resultCard.classList.remove("hidden");
+        document.getElementById("receiptToolName")?.focus();
+      } catch (err) {
+        if (errorEl) {
+          errorEl.textContent = err.message;
+          errorEl.classList.remove("hidden");
+        }
+      } finally {
+        btnParse.disabled = false;
+        btnParse.textContent = "Extract with Gemma";
+        if (loadingEl) loadingEl.classList.add("hidden");
+      }
+    });
+  }
+
+  if (saveForm) {
+    saveForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const toolName = document.getElementById("receiptToolName").value.trim();
+      const planName = document.getElementById("receiptPlanName").value.trim();
+      const amount = parseFloat(document.getElementById("receiptAmount").value) || 0;
+      const unit = document.getElementById("receiptUnit").value.trim() || "USD";
+      const renewalDate = document.getElementById("receiptRenewalDate").value.trim();
+      const owner = document.getElementById("receiptOwner").value.trim() || state.activeMemberName;
+      const notes = document.getElementById("receiptNotes").value.trim();
+      const recordExpense = document.getElementById("receiptRecordExpense")?.checked || false;
+
+      if (!toolName) {
+        if (errorEl) {
+          errorEl.textContent = "Tool name is required.";
+          errorEl.classList.remove("hidden");
+        }
+        return;
+      }
+
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saving...";
+      }
+
+      try {
+        if (errorEl) errorEl.classList.add("hidden");
+        const res = await fetch("/api/tools/save-from-receipt", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Access-Code": getStoredAccessCode()
+          },
+          body: JSON.stringify({
+            name: toolName,
+            plan_name: planName,
+            monthly_cost: amount,
+            budget_amount: amount,
+            unit: unit,
+            renewal_date: renewalDate,
+            owner_name: owner,
+            notes: notes,
+            record_expense: recordExpense,
+            creator_name: state.activeMemberName || "Team"
+          })
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || "Failed to save tool.");
+        }
+
+        if (saveSuccess) {
+          saveSuccess.classList.remove("hidden");
+          setTimeout(() => saveSuccess.classList.add("hidden"), 3000);
+        }
+
+        saveForm.reset();
+        if (textInput) textInput.value = "";
+        if (resultCard) resultCard.classList.add("hidden");
+        if (card) card.classList.add("hidden");
+
+        await loadToolsView();
+        if (recordExpense) {
+          await loadFinances();
+        }
+        await loadActivityFeed();
+      } catch (err) {
+        if (errorEl) {
+          errorEl.textContent = err.message;
+          errorEl.classList.remove("hidden");
+        }
+      } finally {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = "Save tool";
+        }
+      }
+    });
+  }
+}
+
+// ==============================================================================
+// Stage 8 Part 6: Monthly Report Handlers
+// ==============================================================================
+let reportDataCache = null;
+
+async function loadReportView() {
+  const monthSelect = document.getElementById("reportMonthSelect");
+  const selectedMonth = monthSelect ? monthSelect.value : (state.selectedFinanceMonth || "2026-10");
+
+  try {
+    const res = await fetch(`/api/report?month=${selectedMonth}`, {
+      headers: {
+        "X-Access-Code": getStoredAccessCode()
+      }
+    });
+    if (!res.ok) throw new Error("Failed to load monthly report data");
+    const data = await res.json();
+    reportDataCache = data;
+
+    // Populate month options
+    if (monthSelect && data.available_months && data.available_months.length > 0) {
+      const cur = data.month || selectedMonth;
+      monthSelect.innerHTML = "";
+      data.available_months.forEach((m) => {
+        const opt = document.createElement("option");
+        opt.value = m;
+        opt.textContent = m;
+        if (m === cur) opt.selected = true;
+        monthSelect.appendChild(opt);
+      });
+    }
+
+    const printSub = document.getElementById("printReportSubtitle");
+    if (printSub) {
+      printSub.textContent = `Generated for ${data.month}`;
+    }
+
+    renderReportView(data);
+  } catch (err) {
+    console.error("Error loading report:", err);
+  }
+}
+
+function renderReportView(data) {
+  // 1. KPI Cards
+  const tasksCompEl = document.getElementById("reportMetricTasksCompleted");
+  const tasksCreatedEl = document.getElementById("reportMetricTasksCreated");
+  if (tasksCompEl) tasksCompEl.textContent = `${data.tasks.completed_count} completed`;
+  if (tasksCreatedEl) tasksCreatedEl.textContent = `${data.tasks.created_count} created in ${data.month}`;
+
+  const payCollEl = document.getElementById("reportMetricPaymentsCollected");
+  const payExpEl = document.getElementById("reportMetricPaymentsExpected");
+  if (payCollEl) payCollEl.textContent = `$${data.payments.total_received.toFixed(0)}`;
+  if (payExpEl) payExpEl.textContent = `$${data.payments.total_expected.toFixed(0)} expected ($${data.payments.total_pending.toFixed(0)} pending)`;
+
+  const toolSpendEl = document.getElementById("reportMetricToolSpend");
+  const toolBudEl = document.getElementById("reportMetricToolBudget");
+  if (toolSpendEl) toolSpendEl.textContent = `$${data.tools.total_spend.toFixed(0)}`;
+  if (toolBudEl) toolBudEl.textContent = `$${data.tools.total_budget.toFixed(0)} total budget`;
+
+  const actCountEl = document.getElementById("reportMetricActivityCount");
+  if (actCountEl) actCountEl.textContent = `${data.activity.total_count} actions`;
+
+  // 2. Tasks by Client Table
+  const clientTbody = document.getElementById("reportTasksByClientBody");
+  if (clientTbody) {
+    const clients = Object.keys(data.tasks.by_client || {});
+    if (clients.length === 0) {
+      clientTbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center py-3">No client tasks recorded this month.</td></tr>';
+    } else {
+      clientTbody.innerHTML = clients.map((c) => {
+        const item = data.tasks.by_client[c];
+        const rate = item.created > 0 ? Math.round((item.completed / item.created) * 100) : 0;
+        return `
+          <tr>
+            <td><strong>${escapeHtml(c)}</strong></td>
+            <td style="text-align: center;">${item.created}</td>
+            <td style="text-align: center;"><strong>${item.completed}</strong></td>
+            <td style="text-align: right;"><span class="badge ${rate === 100 ? "badge-paid" : "badge-status"}">${rate}%</span></td>
+          </tr>
+        `;
+      }).join("");
+    }
+  }
+
+  // 3. Tasks by Member Table
+  const memberTbody = document.getElementById("reportTasksByMemberBody");
+  if (memberTbody) {
+    const members = Object.keys(data.tasks.by_member || {});
+    if (members.length === 0) {
+      memberTbody.innerHTML = '<tr><td colspan="4" class="text-muted text-center py-3">No tasks assigned or created this month.</td></tr>';
+    } else {
+      memberTbody.innerHTML = members.map((m) => {
+        const item = data.tasks.by_member[m];
+        const rate = item.created > 0 ? Math.round((item.completed / item.created) * 100) : 0;
+        return `
+          <tr>
+            <td><strong>${escapeHtml(m)}</strong></td>
+            <td style="text-align: center;">${item.created}</td>
+            <td style="text-align: center;"><strong>${item.completed}</strong></td>
+            <td style="text-align: right;"><span class="badge ${rate === 100 ? "badge-paid" : "badge-status"}">${rate}%</span></td>
+          </tr>
+        `;
+      }).join("");
+    }
+  }
+
+  // 4. Client Payments Table
+  const payTbody = document.getElementById("reportPaymentsBody");
+  if (payTbody) {
+    const pendingList = data.payments.pending_clients || [];
+    if (pendingList.length === 0) {
+      payTbody.innerHTML = '<tr><td colspan="6" class="text-center py-3" style="color: var(--primary); font-weight: 700;">&#10003; All client retainers fully collected!</td></tr>';
+    } else {
+      payTbody.innerHTML = pendingList.map((p) => {
+        let badgeClass = "badge-pending";
+        if (p.status === "paid") badgeClass = "badge-paid";
+        else if (p.status === "partial") badgeClass = "badge-partial";
+        else if (p.status === "overdue") badgeClass = "badge-overdue";
+
+        return `
+          <tr>
+            <td><strong>${escapeHtml(p.client_name)}</strong></td>
+            <td>$${p.amount_expected.toFixed(0)}</td>
+            <td>$${p.amount_received.toFixed(0)}</td>
+            <td><strong class="metric-expense">$${p.balance.toFixed(0)}</strong></td>
+            <td>${escapeHtml(p.due_date)}</td>
+            <td><span class="badge ${badgeClass}">${escapeHtml(p.status.toUpperCase())}</span></td>
+          </tr>
+        `;
+      }).join("");
+    }
+  }
+
+  // 5. Tools Table
+  const toolTbody = document.getElementById("reportToolsBody");
+  if (toolTbody) {
+    const tools = data.tools.tools_list || [];
+    if (tools.length === 0) {
+      toolTbody.innerHTML = '<tr><td colspan="7" class="text-muted text-center py-3">No software tools recorded.</td></tr>';
+    } else {
+      toolTbody.innerHTML = tools.map((t) => {
+        let badgeClass = "badge-paid";
+        if (t.percent_used >= 100) badgeClass = "badge-danger";
+        else if (t.percent_used >= 80) badgeClass = "badge-warning";
+
+        return `
+          <tr>
+            <td>
+              <strong>${escapeHtml(t.name)}</strong>
+              <div class="text-muted" style="font-size: 11px;">${escapeHtml(t.plan_name)}</div>
+            </td>
+            <td>$${t.monthly_cost.toFixed(0)}/mo</td>
+            <td>${t.budget_amount} ${escapeHtml(t.unit)}</td>
+            <td><strong>${t.used} ${escapeHtml(t.unit)}</strong></td>
+            <td>${t.left} ${escapeHtml(t.unit)}</td>
+            <td><span class="badge ${badgeClass}">${t.percent_used}% used</span></td>
+            <td>${escapeHtml(t.renewal_date)}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+  }
+}
+
+function setupReportHandlers() {
+  const monthSelect = document.getElementById("reportMonthSelect");
+  if (monthSelect) {
+    monthSelect.addEventListener("change", () => {
+      loadReportView();
+    });
+  }
+
+  const btnWrite = document.getElementById("btnWriteReportSummary");
+  const summaryBox = document.getElementById("reportSummaryBox");
+  const loadingIndicator = document.getElementById("summaryLoadingIndicator");
+  const errorMsg = document.getElementById("summaryErrorMsg");
+
+  if (btnWrite) {
+    btnWrite.addEventListener("click", async () => {
+      if (!reportDataCache) {
+        await loadReportView();
+      }
+      if (!reportDataCache) return;
+
+      btnWrite.disabled = true;
+      btnWrite.textContent = "Writing...";
+      if (loadingIndicator) loadingIndicator.classList.remove("hidden");
+      if (errorMsg) errorMsg.classList.add("hidden");
+
+      // Send ONLY aggregated numbers to Gemma
+      const aggregatedMetrics = {
+        month: reportDataCache.month,
+        tasks_created: reportDataCache.tasks.created_count,
+        tasks_completed: reportDataCache.tasks.completed_count,
+        payments_expected: reportDataCache.payments.total_expected,
+        payments_received: reportDataCache.payments.total_received,
+        payments_pending: reportDataCache.payments.total_pending,
+        pending_clients_count: (reportDataCache.payments.pending_clients || []).length,
+        tool_spend: reportDataCache.tools.total_spend,
+        tool_total_budget: reportDataCache.tools.total_budget,
+        activity_count: reportDataCache.activity.total_count
+      };
+
+      try {
+        const res = await fetch("/api/ai/report-summary", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Access-Code": getStoredAccessCode()
+          },
+          body: JSON.stringify({
+            month: reportDataCache.month,
+            metrics: aggregatedMetrics
+          })
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || "Failed to generate AI executive summary.");
+        }
+
+        const data = await res.json();
+        if (summaryBox) {
+          summaryBox.value = data.summary || "";
+          summaryBox.focus();
+        }
+      } catch (err) {
+        if (errorMsg) {
+          errorMsg.textContent = `${err.message} (Database numbers are still available below).`;
+          errorMsg.classList.remove("hidden");
+        }
+      } finally {
+        btnWrite.disabled = false;
+        btnWrite.textContent = "\u2728 Write summary";
+        if (loadingIndicator) loadingIndicator.classList.add("hidden");
+      }
+    });
+  }
+
+  const btnCopy = document.getElementById("btnCopyReport");
+  if (btnCopy) {
+    btnCopy.addEventListener("click", async () => {
+      if (!reportDataCache) {
+        await loadReportView();
+      }
+      if (!reportDataCache) return;
+
+      const summaryText = summaryBox ? summaryBox.value.trim() : "";
+      const textToCopy = formatReportAsText(reportDataCache, summaryText);
+
+      try {
+        await navigator.clipboard.writeText(textToCopy);
+        const origText = btnCopy.textContent;
+        btnCopy.textContent = "\u2713 Copied!";
+        setTimeout(() => {
+          btnCopy.textContent = origText;
+        }, 2000);
+      } catch (err) {
+        window.prompt("Copy report text:", textToCopy);
+      }
+    });
+  }
+
+  const btnPrint = document.getElementById("btnPrintReport");
+  if (btnPrint) {
+    btnPrint.addEventListener("click", () => {
+      window.print();
+    });
+  }
+}
+
+function formatReportAsText(data, summary) {
+  let text = `==============================================\n`;
+  text += `NEWVORA HQ - MONTHLY EXECUTIVE REPORT (${data.month})\n`;
+  text += `==============================================\n\n`;
+
+  if (summary) {
+    text += `EXECUTIVE SUMMARY:\n${summary}\n\n`;
+  }
+
+  text += `KEY METRICS:\n`;
+  text += `- Tasks Deliverables: ${data.tasks.completed_count} completed / ${data.tasks.created_count} created\n`;
+  text += `- Client Collections: $${data.payments.total_received.toFixed(0)} received of $${data.payments.total_expected.toFixed(0)} expected ($${data.payments.total_pending.toFixed(0)} pending)\n`;
+  text += `- Tool Subscriptions: $${data.tools.total_spend.toFixed(0)} spent this month ($${data.tools.total_budget.toFixed(0)} total monthly budget)\n`;
+  text += `- Audit Actions Logged: ${data.activity.total_count}\n\n`;
+
+  text += `TASKS BY CLIENT:\n`;
+  const clients = Object.keys(data.tasks.by_client || {});
+  if (clients.length === 0) {
+    text += `No tasks recorded.\n`;
+  } else {
+    clients.forEach((c) => {
+      const item = data.tasks.by_client[c];
+      const rate = item.created > 0 ? Math.round((item.completed / item.created) * 100) : 0;
+      text += `- ${c}: ${item.completed}/${item.created} completed (${rate}%)\n`;
+    });
+  }
+  text += `\n`;
+
+  text += `CLIENT PAYMENTS & PENDING DUES:\n`;
+  const pendings = data.payments.pending_clients || [];
+  if (pendings.length === 0) {
+    text += `All client retainers settled.\n`;
+  } else {
+    pendings.forEach((p) => {
+      text += `- ${p.client_name}: $${p.amount_received.toFixed(0)} received, $${p.balance.toFixed(0)} balance (${p.status.toUpperCase()})\n`;
+    });
+  }
+  text += `\n`;
+
+  text += `TOOL SUBSCRIPTIONS & USAGE:\n`;
+  const tools = data.tools.tools_list || [];
+  if (tools.length === 0) {
+    text += `No tools recorded.\n`;
+  } else {
+    tools.forEach((t) => {
+      text += `- ${t.name} (${t.plan_name}): ${t.used}/${t.budget_amount} ${t.unit} used (${t.percent_used}%), $${t.monthly_cost.toFixed(0)}/mo\n`;
+    });
+  }
+
+  text += `\nGenerated by Newvora HQ`;
+  return text;
+}
+
+function setupDuesPaymentHandlers() {
+  const form = document.getElementById("duesPaymentForm");
+  const card = document.getElementById("duesPaymentCard");
+  const btnCancel = document.getElementById("btnCancelPayment");
+  const errEl = document.getElementById("duesPaymentError");
+
+  const historyModal = document.getElementById("paymentHistoryModal");
+  const btnCloseHistory = document.getElementById("btnClosePaymentHistory");
+
+  if (btnCancel && card) {
+    btnCancel.addEventListener("click", () => {
+      card.classList.add("hidden");
+      if (errEl) errEl.classList.add("hidden");
+    });
+  }
+
+  if (btnCloseHistory && historyModal) {
+    btnCloseHistory.addEventListener("click", () => {
+      historyModal.classList.add("hidden");
+    });
+  }
+
+  if (historyModal) {
+    historyModal.addEventListener("click", (e) => {
+      if (e.target === historyModal) {
+        historyModal.classList.add("hidden");
+      }
+    });
+  }
+
+  if (form) {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const clientId = parseInt(document.getElementById("paymentClientId").value, 10);
+      const month = document.getElementById("paymentMonth").value.trim();
+      const amountExpected = parseFloat(document.getElementById("paymentAmountExpected").value) || 0;
+      const amountReceived = parseFloat(document.getElementById("paymentAmountReceived").value) || 0;
+      const dateReceived = document.getElementById("paymentDateReceived").value.trim();
+      const method = document.getElementById("paymentMethod").value.trim();
+      const note = document.getElementById("paymentNote").value.trim();
+
+      const saveBtn = document.getElementById("btnSavePayment");
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saving...";
+      }
+
+      try {
+        if (errEl) errEl.classList.add("hidden");
+        const res = await fetch("/api/client-payments", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Access-Code": getStoredAccessCode()
+          },
+          body: JSON.stringify({
+            client_id: clientId,
+            month: month,
+            amount_expected: amountExpected,
+            amount_received: amountReceived,
+            date_received: dateReceived,
+            method: method,
+            note: note,
+            creator_name: state.activeMemberName || "Team"
+          })
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || "Failed to save client payment.");
+        }
+
+        if (card) card.classList.add("hidden");
+        await loadDuesView();
+        if (state.currentView === "money") {
+          await loadFinances();
+        }
+        await loadActivityFeed();
+      } catch (err) {
+        if (errEl) {
+          errEl.textContent = err.message;
+          errEl.classList.remove("hidden");
+        }
+      } finally {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = "Save payment";
+        }
       }
     });
   }
@@ -2399,6 +3701,8 @@ function initApp() {
 
   // 7. Stage 7 Dues, Tools & Notification handlers
   setupStage7Handlers();
+  setupNotificationsCenterHandlers();
+  setupReportHandlers();
 
   const btnRefreshActivity = document.getElementById("btnRefreshActivity");
   if (btnRefreshActivity) {
@@ -2408,6 +3712,7 @@ function initApp() {
   // 8. Initial data load
   loadMembers();
   loadClients();
+  loadNotificationsCenter();
 }
 
 // ==============================================================================

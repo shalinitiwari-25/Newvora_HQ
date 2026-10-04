@@ -164,6 +164,61 @@ def init_db() -> None:
             );
         """)
 
+        # 10. Client Payments (Stage 8 Part 2)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS client_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                client_id INTEGER NOT NULL,
+                month TEXT NOT NULL,
+                amount_expected REAL NOT NULL,
+                amount_received REAL NOT NULL DEFAULT 0.0,
+                date_received TEXT,
+                method TEXT,
+                note TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (client_id) REFERENCES clients (id) ON DELETE CASCADE
+            );
+        """)
+
+        # 11. Tool Usage Log (Stage 8 Part 3)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS tool_usage_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                amount_used REAL NOT NULL,
+                note TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (tool_id) REFERENCES tools (id) ON DELETE CASCADE
+            );
+        """)
+
+        # 12. Centralized Notifications (Stage 8 Part 4)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                member_id INTEGER,
+                type TEXT NOT NULL,
+                text TEXT NOT NULL,
+                link_type TEXT,
+                link_id INTEGER,
+                is_read INTEGER NOT NULL DEFAULT 0,
+                stable_key TEXT UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (member_id) REFERENCES members (id) ON DELETE CASCADE
+            );
+        """)
+
+        # Dynamic migrations for tools table (Stage 8 Part 3)
+        cursor.execute("PRAGMA table_info(tools);")
+        existing_tool_cols = {row["name"] for row in cursor.fetchall()}
+        if "plan_name" not in existing_tool_cols:
+            conn.execute("ALTER TABLE tools ADD COLUMN plan_name TEXT DEFAULT '';")
+        if "budget_amount" not in existing_tool_cols:
+            conn.execute("ALTER TABLE tools ADD COLUMN budget_amount REAL NOT NULL DEFAULT 0.0;")
+        if "unit" not in existing_tool_cols:
+            conn.execute("ALTER TABLE tools ADD COLUMN unit TEXT NOT NULL DEFAULT 'USD';")
+
     seed_db(conn)
     conn.close()
 
@@ -346,3 +401,119 @@ def seed_db(conn: sqlite3.Connection) -> None:
                     INSERT INTO task_notifications (member_id, task_id, is_read)
                     VALUES (?, ?, ?);
                 """, notifs_data)
+
+    # Seed Client Payments (Stage 8 Part 2) - 3 months demo data
+    with conn:
+        cursor.execute("SELECT COUNT(*) FROM client_payments;")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("SELECT id, name, monthly_fee FROM clients;")
+            c_rows = cursor.fetchall()
+            c_map = {row["name"]: row for row in c_rows}
+
+            payments_data = []
+            apex = c_map.get("Apex Dental Clinic")
+            zephyr = c_map.get("Zephyr Cafe & Bakery")
+            veda = c_map.get("Veda Health & Yoga")
+
+            if apex and zephyr and veda:
+                # August 2026 (All paid)
+                payments_data.extend([
+                    (apex["id"], "2026-08", float(apex["monthly_fee"]), float(apex["monthly_fee"]), "2026-08-01", "Bank Transfer", "August Retainer fee received"),
+                    (zephyr["id"], "2026-08", float(zephyr["monthly_fee"]), float(zephyr["monthly_fee"]), "2026-08-15", "UPI", "Growth retainer (August)"),
+                    (veda["id"], "2026-08", float(veda["monthly_fee"]), float(veda["monthly_fee"]), "2026-08-28", "Bank Transfer", "Basic maintenance retainer (August)"),
+                ])
+                # September 2026 (Veda partial)
+                payments_data.extend([
+                    (apex["id"], "2026-09", float(apex["monthly_fee"]), float(apex["monthly_fee"]), "2026-09-02", "Bank Transfer", "September Retainer fee received"),
+                    (zephyr["id"], "2026-09", float(zephyr["monthly_fee"]), float(zephyr["monthly_fee"]), "2026-09-15", "UPI", "Growth retainer (September)"),
+                    (veda["id"], "2026-09", float(veda["monthly_fee"]), 150.0, "2026-09-29", "UPI", "Partial installment, $100 balance carried over"),
+                ])
+                # October 2026 (Zephyr paid, Apex overdue, Veda pending)
+                payments_data.extend([
+                    (apex["id"], "2026-10", float(apex["monthly_fee"]), 0.0, None, None, "Due Oct 1st - awaiting transfer"),
+                    (zephyr["id"], "2026-10", float(zephyr["monthly_fee"]), float(zephyr["monthly_fee"]), "2026-10-02", "UPI", "October retainer settled early"),
+                    (veda["id"], "2026-10", float(veda["monthly_fee"]), 0.0, None, None, "Due Oct 28th - pending billing date"),
+                ])
+
+                cursor.executemany("""
+                    INSERT INTO client_payments (client_id, month, amount_expected, amount_received, date_received, method, note)
+                    VALUES (?, ?, ?, ?, ?, ?, ?);
+                """, payments_data)
+
+    # Seed 5 Tools with Budget & Usage (Stage 8 Part 3)
+    with conn:
+        cursor.execute("SELECT id, name FROM members;")
+        m_map = {row["name"]: row["id"] for row in cursor.fetchall()}
+
+        # 5 demo tools: Claude, Convex, Supabase, Vercel, Render
+        demo_tools = [
+            ("Claude", "Pro Team", 100.0, "credits", 40.0, "2026-10-21", m_map.get("Riya"), "Riya", "AI model subscriptions and prompt prototyping"),
+            ("Convex", "Starter Cloud", 50000.0, "tokens", 25.0, "2026-10-18", m_map.get("Rohan"), "Rohan", "Reactive backend data sync & cache tokens"),
+            ("Supabase", "Pro Database", 50.0, "USD", 25.0, "2026-10-25", m_map.get("Rohan"), "Rohan", "PostgreSQL database hosting & auth for client portals"),
+            ("Vercel", "Pro Hosting", 40.0, "USD", 20.0, "2026-10-08", m_map.get("Riya"), "Riya", "Frontend deployments & client preview domains"),
+            ("Render", "Web Services", 25.0, "USD", 15.0, "2026-10-28", m_map.get("Anya"), "Anya", "Backend FastAPI web services & worker hosting"),
+        ]
+
+        for name, plan, budget, unit, cost, renewal, owner_id, owner_name, notes in demo_tools:
+            cursor.execute("SELECT id FROM tools WHERE name = ?;", (name,))
+            existing = cursor.fetchone()
+            if existing:
+                cursor.execute("""
+                    UPDATE tools
+                    SET plan_name = ?, budget_amount = ?, unit = ?, monthly_cost = ?, renewal_date = ?, owner_id = ?, owner_name = ?, notes = ?
+                    WHERE id = ?;
+                """, (plan, budget, unit, cost, renewal, owner_id, owner_name, notes, existing["id"]))
+            else:
+                cursor.execute("""
+                    INSERT INTO tools (name, plan_name, budget_amount, unit, monthly_cost, renewal_date, owner_id, owner_name, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """, (name, plan, budget, unit, cost, renewal, owner_id, owner_name, notes))
+
+        # Seed tool_usage_log if empty
+        cursor.execute("SELECT COUNT(*) FROM tool_usage_log;")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("SELECT id, name FROM tools;")
+            t_map = {row["name"]: row["id"] for row in cursor.fetchall()}
+
+            usage_entries = []
+            if "Claude" in t_map:
+                # 85 credits used total across Oct 1-4
+                usage_entries.extend([
+                    (t_map["Claude"], "2026-10-01", 25.0, "Drafting weekly client content"),
+                    (t_map["Claude"], "2026-10-02", 30.0, "WhatsApp intake prompts tuning"),
+                    (t_map["Claude"], "2026-10-03", 20.0, "Copywriting review for Zephyr"),
+                    (t_map["Claude"], "2026-10-04", 10.0, "Portal bug analysis"),
+                ])
+            if "Convex" in t_map:
+                # 48000 tokens used total (projected run out early)
+                usage_entries.extend([
+                    (t_map["Convex"], "2026-10-01", 12000.0, "Initial portal data migration"),
+                    (t_map["Convex"], "2026-10-02", 15000.0, "Live subscription state sync"),
+                    (t_map["Convex"], "2026-10-03", 11000.0, "Realtime updates testing"),
+                    (t_map["Convex"], "2026-10-04", 10000.0, "High activity webhook logs"),
+                ])
+            if "Supabase" in t_map:
+                # 20 USD used
+                usage_entries.extend([
+                    (t_map["Supabase"], "2026-10-01", 10.0, "Base DB compute"),
+                    (t_map["Supabase"], "2026-10-03", 10.0, "Storage & auth usage"),
+                ])
+            if "Vercel" in t_map:
+                # 22 USD used
+                usage_entries.extend([
+                    (t_map["Vercel"], "2026-10-01", 12.0, "Bandwidth & preview deployments"),
+                    (t_map["Vercel"], "2026-10-03", 10.0, "Edge functions executions"),
+                ])
+            if "Render" in t_map:
+                # 11 USD used
+                usage_entries.extend([
+                    (t_map["Render"], "2026-10-01", 6.0, "Web service instance run time"),
+                    (t_map["Render"], "2026-10-03", 5.0, "Staging environment compute"),
+                ])
+
+            if usage_entries:
+                cursor.executemany("""
+                    INSERT INTO tool_usage_log (tool_id, date, amount_used, note)
+                    VALUES (?, ?, ?, ?);
+                """, usage_entries)
+

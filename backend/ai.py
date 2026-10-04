@@ -359,3 +359,161 @@ async def parse_whatsapp_message(
     raise RuntimeError(
         f"Gemma was unable to format this conversation into structured tasks. Please check the text or image. (Details: {last_error})"
     )
+
+
+# ==============================================================================
+# Stage 8 Part 5: Receipt Reader AI Extraction
+# ==============================================================================
+
+def extract_receipt_json(text: str) -> Optional[Dict[str, Any]]:
+    """
+    Safely extract JSON for tool receipt parsing from model output.
+    """
+    if not text:
+        return None
+    cleaned = text.strip()
+
+    def is_valid_receipt_dict(d: Any) -> bool:
+        return isinstance(d, dict) and ("tool_name" in d or "amount" in d)
+
+    # 1. Direct parse
+    try:
+        data = json.loads(cleaned)
+        if is_valid_receipt_dict(data):
+            return data
+    except Exception:
+        pass
+
+    # 2. Markdown code fences
+    fences = re.findall(r"```(?:json)?\s*([\s\S]*?)\s*```", cleaned, re.IGNORECASE)
+    for fence in fences:
+        try:
+            data = json.loads(fence.strip())
+            if is_valid_receipt_dict(data):
+                return data
+        except Exception:
+            continue
+
+    # 3. Curly brace block
+    brace_match = re.search(r"(\{[\s\S]*\})", cleaned)
+    if brace_match:
+        try:
+            data = json.loads(brace_match.group(1).strip())
+            if is_valid_receipt_dict(data):
+                return data
+        except Exception:
+            pass
+
+    return None
+
+
+def validate_and_clean_receipt(data: Dict[str, Any]) -> Dict[str, Any]:
+    tool_name = str(data.get("tool_name") or "").strip()
+    plan_name = str(data.get("plan_name") or "").strip()
+
+    raw_amt = data.get("amount")
+    try:
+        amount = float(raw_amt) if raw_amt is not None else 0.0
+    except (ValueError, TypeError):
+        num_match = re.search(r"[\d]+(?:\.[\d]+)?", str(raw_amt or ""))
+        amount = float(num_match.group(0)) if num_match else 0.0
+
+    currency = str(data.get("currency") or "").strip()
+    billing_period = str(data.get("billing_period") or "unknown").strip().lower()
+    if billing_period not in ("monthly", "yearly", "unknown"):
+        billing_period = "unknown"
+
+    renewal_date = str(data.get("renewal_date") or "").strip()
+    if renewal_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", renewal_date):
+        renewal_date = ""
+
+    notes = str(data.get("notes") or "").strip()
+
+    return {
+        "tool_name": tool_name,
+        "plan_name": plan_name,
+        "amount": amount,
+        "currency": currency,
+        "billing_period": billing_period,
+        "renewal_date": renewal_date,
+        "notes": notes
+    }
+
+
+async def parse_tool_receipt(receipt_text: str) -> Dict[str, Any]:
+    """
+    Parses a subscription email, invoice, or receipt text into tool details using Gemma.
+    Retries up to 2 times on parsing failure.
+    """
+    clean_text = receipt_text.strip()
+    if not clean_text:
+        raise ValueError("Receipt text cannot be empty.")
+
+    system_prompt = (
+        "You are an AI assistant for Newvora HQ.\n"
+        "Your task is to extract software subscription details from an email receipt, invoice, or billing text.\n"
+        "Output ONLY valid JSON.\n\n"
+        "MANDATORY INSTRUCTIONS:\n"
+        "1. DO NOT write reasoning, thinking, analysis, notes, or explanations.\n"
+        "2. Start your response IMMEDIATELY with the character '{'. No code fences, no markdown backticks.\n"
+        "3. JSON FORMAT:\n"
+        '   {"tool_name":"","plan_name":"","amount":0,"currency":"","billing_period":"monthly|yearly|unknown","renewal_date":"YYYY-MM-DD or empty","notes":""}\n'
+        "4. Never invent values that are not in the text; leave fields empty (or 0 for amount) instead.\n"
+        "5. renewal_date must be in YYYY-MM-DD format if mentioned, or empty string \"\" if not mentioned.\n"
+        "6. billing_period must be one of: 'monthly', 'yearly', or 'unknown'."
+    )
+
+    prompt = f"Extract tool subscription details from this invoice/receipt text:\n\"\"\"\n{clean_text}\n\"\"\""
+    current_prompt = prompt
+    max_retries = 2
+    last_error = ""
+
+    for attempt in range(max_retries + 1):
+        try:
+            raw_response = await call_ai(prompt=current_prompt, system_prompt=system_prompt)
+            parsed_json = extract_receipt_json(raw_response)
+            if not parsed_json:
+                raise ValueError("Output could not be parsed as valid JSON.")
+            cleaned = validate_and_clean_receipt(parsed_json)
+            return cleaned
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"Gemma receipt parsing attempt {attempt + 1} failed: {last_error}")
+            if attempt < max_retries:
+                current_prompt = (
+                    f"CRITICAL REMINDER: Your previous output failed JSON validation ({last_error}).\n"
+                    "Output ONLY raw valid JSON starting with '{'.\n"
+                    'Format: {"tool_name":"","plan_name":"","amount":0,"currency":"","billing_period":"monthly|yearly|unknown","renewal_date":"YYYY-MM-DD or empty","notes":""}\n\n'
+                    + prompt
+                )
+
+    raise RuntimeError(
+        f"Gemma was unable to parse the receipt into tool details. Please verify the receipt text. (Details: {last_error})"
+    )
+
+
+# ==============================================================================
+# Stage 8 Part 6: Monthly Report AI Summary
+# ==============================================================================
+
+async def generate_monthly_report_summary(metrics: Dict[str, Any]) -> str:
+    """
+    Generates a concise (<150 words) plain-language executive summary of monthly metrics using Gemma.
+    """
+    system_prompt = (
+        "You are an executive assistant for Newvora, a student-run agency building client websites.\n"
+        "You are provided ONLY with aggregated monthly performance numbers.\n"
+        "Write a concise, plain-language executive summary for the team under 150 words.\n"
+        "Highlight tasks completed, client payment collection status, and tool spending/budget health.\n"
+        "Do NOT use markdown headers or bullet points; write 2 short, readable paragraphs."
+    )
+    prompt = f"Monthly Aggregated Numbers:\n{json.dumps(metrics, indent=2)}"
+    try:
+        summary = await call_ai(prompt=prompt, system_prompt=system_prompt)
+        clean_summary = re.sub(r"<thought>[\s\S]*?</thought>", "", summary, flags=re.IGNORECASE).strip()
+        clean_summary = clean_summary.replace("```json", "").replace("```", "").strip()
+        return clean_summary
+    except Exception as e:
+        logger.warning(f"Gemma report summary generation failed: {e}")
+        raise RuntimeError(f"Could not generate AI summary: {str(e)}")
+
