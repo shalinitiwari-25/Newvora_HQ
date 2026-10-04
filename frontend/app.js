@@ -1529,18 +1529,18 @@ function renderToolExpensesChart(toolData, totalExpenses) {
 
     svgContent += `
       <!-- Tool Name Label -->
-      <text x="${labelWidth - 10}" y="${y + 14}" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="12" font-weight="500" fill="#191c1b">
+      <text class="chart-label-tool" x="${labelWidth - 10}" y="${y + 14}" text-anchor="end" font-family="inherit" font-size="12" font-weight="600" fill="var(--text-main, #1F2A2E)">
         ${escapeHtml(tool.tool_name)}
       </text>
 
       <!-- Background Track Bar -->
-      <rect x="${labelWidth}" y="${y + 4}" width="${barMaxWidth}" height="14" rx="2" fill="#f1efe9" />
+      <rect class="chart-track-bar" x="${labelWidth}" y="${y + 4}" width="${barMaxWidth}" height="14" rx="2" fill="var(--bar-bg, #E2EAE4)" />
 
       <!-- Active Expense Bar -->
-      <rect x="${labelWidth}" y="${y + 4}" width="${barWidth}" height="14" rx="2" fill="#1b3a2f" />
+      <rect class="chart-fill-bar" x="${labelWidth}" y="${y + 4}" width="${barWidth}" height="14" rx="2" fill="var(--bar-fill, #1F8A70)" />
 
       <!-- Amount & Percentage Label -->
-      <text x="${labelWidth + barMaxWidth + 12}" y="${y + 14}" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-size="11" font-weight="600" fill="#5e635f">
+      <text class="chart-label-val" x="${labelWidth + barMaxWidth + 12}" y="${y + 14}" font-family="inherit" font-size="11" font-weight="600" fill="var(--text-muted, #5F7076)">
         $${tool.total_amount.toFixed(0)} (${tool.percentage}%)
       </text>
     `;
@@ -3716,9 +3716,89 @@ function initApp() {
 }
 
 // ==============================================================================
+// Light / Dark Theme Management
+// ==============================================================================
+function initTheme() {
+  const toggleBtn = document.getElementById("btnThemeToggle");
+  const toggleBtnMobile = document.getElementById("btnThemeToggleMobile");
+
+  function getActiveTheme() {
+    return document.documentElement.getAttribute("data-theme") || "light";
+  }
+
+  function updateToggleUI(theme) {
+    const isDark = theme === "dark";
+    const label = isDark ? "Switch to light theme" : "Switch to dark theme";
+
+    [toggleBtn, toggleBtnMobile].forEach((btn) => {
+      if (!btn) return;
+      btn.setAttribute("aria-label", label);
+      btn.setAttribute("title", label);
+      const sunIcon = btn.querySelector(".theme-icon-sun");
+      const moonIcon = btn.querySelector(".theme-icon-moon");
+      if (sunIcon && moonIcon) {
+        if (isDark) {
+          sunIcon.classList.remove("hidden");
+          moonIcon.classList.add("hidden");
+        } else {
+          sunIcon.classList.add("hidden");
+          moonIcon.classList.remove("hidden");
+        }
+      }
+    });
+
+    const metaTheme = document.getElementById("metaThemeColor");
+    if (metaTheme) {
+      metaTheme.setAttribute("content", isDark ? "#121615" : "#F1EFE7");
+    }
+  }
+
+  function setTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    try {
+      localStorage.setItem("newvora_theme", theme);
+    } catch (e) {
+      // storage blocked or private mode
+    }
+    updateToggleUI(theme);
+  }
+
+  function toggleTheme() {
+    const current = getActiveTheme();
+    const next = current === "dark" ? "light" : "dark";
+    setTheme(next);
+  }
+
+  if (toggleBtn) {
+    toggleBtn.addEventListener("click", toggleTheme);
+  }
+  if (toggleBtnMobile) {
+    toggleBtnMobile.addEventListener("click", toggleTheme);
+  }
+
+  // Sync initial UI with currently active theme
+  updateToggleUI(getActiveTheme());
+
+  // Listen to system preference changes if no manual preference stored
+  if (window.matchMedia) {
+    try {
+      const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+      mediaQuery.addEventListener("change", (e) => {
+        try {
+          if (!localStorage.getItem("newvora_theme")) {
+            setTheme(e.matches ? "dark" : "light");
+          }
+        } catch (err) {}
+      });
+    } catch (err) {}
+  }
+}
+
+// ==============================================================================
 // Initial Setup & Event Listeners
 // ==============================================================================
 document.addEventListener("DOMContentLoaded", () => {
+  initTheme();
   const accessGateForm = document.getElementById("accessGateForm");
   if (accessGateForm) {
     accessGateForm.addEventListener("submit", handleAccessGateSubmit);

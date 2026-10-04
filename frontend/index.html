@@ -3,7 +3,27 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#F1EFE7" id="metaThemeColor">
   <title>Newvora HQ</title>
+  <script>
+    (function() {
+      try {
+        var stored = localStorage.getItem('newvora_theme');
+        var theme = stored;
+        if (!theme) {
+          theme = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+        }
+        document.documentElement.setAttribute('data-theme', theme);
+        var metaTheme = document.getElementById('metaThemeColor');
+        if (metaTheme) {
+          metaTheme.setAttribute('content', theme === 'dark' ? '#121615' : '#F1EFE7');
+        }
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -44,7 +64,25 @@
     <!-- Mobile Header -->
     <header class="mobile-bar">
       <div class="brand-title">Newvora HQ</div>
-      <button type="button" class="btn btn-secondary mobile-menu-btn" id="mobileMenuToggle">Menu</button>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <button type="button" class="btn-theme-toggle" id="btnThemeToggleMobile" title="Switch to dark theme" aria-label="Switch to dark theme">
+          <svg class="theme-icon theme-icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+          <svg class="theme-icon theme-icon-sun hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="5"></circle>
+            <line x1="12" y1="1" x2="12" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line>
+            <line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+          </svg>
+        </button>
+        <button type="button" class="btn btn-secondary mobile-menu-btn" id="mobileMenuToggle">Menu</button>
+      </div>
     </header>
 
     <!-- Sidebar Navigation -->
@@ -54,10 +92,28 @@
           <div class="brand-name">Newvora HQ</div>
           <div class="brand-tag">Internal Workspace</div>
         </div>
-        <button type="button" class="btn-bell" id="btnNotificationsBell" title="Notifications" aria-label="Notifications">
-          <span class="bell-icon">&#128276;</span>
-          <span id="bellUnreadBadge" class="bell-badge hidden">0</span>
-        </button>
+        <div class="sidebar-header-actions">
+          <button type="button" class="btn-theme-toggle" id="btnThemeToggle" title="Switch to dark theme" aria-label="Switch to dark theme">
+            <svg class="theme-icon theme-icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+            </svg>
+            <svg class="theme-icon theme-icon-sun hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="5"></circle>
+              <line x1="12" y1="1" x2="12" y2="3"></line>
+              <line x1="12" y1="21" x2="12" y2="23"></line>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+              <line x1="1" y1="12" x2="3" y2="12"></line>
+              <line x1="21" y1="12" x2="23" y2="12"></line>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+            </svg>
+          </button>
+          <button type="button" class="btn-bell" id="btnNotificationsBell" title="Notifications" aria-label="Notifications">
+            <span class="bell-icon">&#128276;</span>
+            <span id="bellUnreadBadge" class="bell-badge hidden">0</span>
+          </button>
+        </div>
       </div>
 
       <!-- Who are you? Member Selector -->
