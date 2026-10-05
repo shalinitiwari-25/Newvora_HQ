@@ -3595,6 +3595,7 @@ async function handleAccessGateSubmit(e) {
     setStoredAccessCode(code);
     hideAccessGate();
     initApp();
+    loadAiModelBadge();
   } catch (err) {
     errEl.textContent = err.message;
     errEl.classList.remove("hidden");
@@ -3602,6 +3603,52 @@ async function handleAccessGateSubmit(e) {
   } finally {
     btn.disabled = false;
     btn.textContent = "Unlock Workspace";
+  }
+}
+
+// ==============================================================================
+// AI Model Badge
+// ==============================================================================
+async function loadAiModelBadge() {
+  const badge = document.getElementById("aiModelBadge");
+  if (!badge) return;
+
+  const fallbackText = "Gemma via Gemini API";
+
+  try {
+    const headers = {};
+    const accessCode = getStoredAccessCode();
+    if (accessCode) {
+      headers["X-Access-Code"] = accessCode;
+    }
+
+    const res = await fetch("/api/ai/model-info", { headers });
+    if (!res.ok) {
+      badge.textContent = fallbackText;
+      return;
+    }
+
+    const data = await res.json();
+    const model = (data && data.model ? String(data.model) : "").trim();
+    const provider = (data && data.provider ? String(data.provider) : "").trim().toLowerCase();
+
+    if (!model) {
+      badge.textContent = fallbackText;
+      return;
+    }
+
+    let providerLabel = "Gemini API";
+    if (provider === "ollama") {
+      providerLabel = "Ollama";
+    } else if (provider === "gemini") {
+      providerLabel = "Gemini API";
+    } else if (provider) {
+      providerLabel = provider.toUpperCase();
+    }
+
+    badge.textContent = `${model} via ${providerLabel}`;
+  } catch (err) {
+    badge.textContent = fallbackText;
   }
 }
 
@@ -3622,6 +3669,7 @@ async function checkAccessAndInit() {
     if (res.ok) {
       hideAccessGate();
       initApp();
+      loadAiModelBadge();
     } else {
       setStoredAccessCode("");
       showAccessGate("Access session expired. Please enter the team passcode.");
@@ -3713,6 +3761,7 @@ function initApp() {
   loadMembers();
   loadClients();
   loadNotificationsCenter();
+  loadAiModelBadge();
 }
 
 // ==============================================================================

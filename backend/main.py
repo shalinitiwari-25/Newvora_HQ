@@ -18,7 +18,9 @@ from backend.ai import (
     normalize_priority,
     call_ai,
     parse_tool_receipt,
-    generate_monthly_report_summary
+    generate_monthly_report_summary,
+    AI_PROVIDER,
+    AI_MODEL
 )
 
 load_dotenv()
@@ -2104,6 +2106,23 @@ async def generate_report_summary_endpoint(payload: ReportSummaryRequest):
         return {"success": True, "summary": summary}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/ai/model-info", dependencies=[Depends(verify_access_code)])
+@app.get("/api/ai/info", dependencies=[Depends(verify_access_code)])
+def get_ai_model_info():
+    """
+    Returns only the configured AI provider and model name.
+    Protected by the existing ACCESS_CODE check.
+    Never returns any API key or secret.
+    """
+    provider = os.getenv("AI_PROVIDER", AI_PROVIDER).lower()
+    model = os.getenv("AI_MODEL", AI_MODEL)
+    return {
+        "provider": provider,
+        "model": model
+    }
+
 
 
 

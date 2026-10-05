@@ -16,7 +16,7 @@ logger = logging.getLogger("newvora.ai")
 # To switch to local Ollama, set AI_PROVIDER="ollama" in .env
 # ==============================================================================
 AI_PROVIDER = os.getenv("AI_PROVIDER", "gemini").lower()
-AI_MODEL = os.getenv("AI_MODEL", "gemma-2-9b-it")
+AI_MODEL = os.getenv("AI_MODEL", "gemma-4-26b-a4b-it")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 OLLAMA_API_URL = os.getenv("OLLAMA_API_URL", "http://localhost:11434")
 
