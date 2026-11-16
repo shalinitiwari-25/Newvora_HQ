@@ -192,7 +192,7 @@ On first run, the database file at `./data/newvora.db` is automatically created,
 | `GOOGLE_API_KEY` | Google AI Studio API key for Gemma model inference | `""` (required for Gemini API) |
 | `AI_PROVIDER` | AI provider backend: `gemini` or `ollama` | `gemini` |
 | `AI_MODEL` | AI model name passed to the provider | `gemma-4-26b-a4b-it` |
-| `ACCESS_CODE` | Shared team passcode to unlock the workspace UI and protect AI endpoints | Set via `ACCESS_CODE` (choose your own team passcode) |
+| `ACCESS_CODE` | Shared team passcode to unlock the workspace UI and protect AI endpoints | Set via `ACCESS_CODE` (ex:newvora2026) |
 | `PORT` | HTTP server port | `8000` |
 | `DB_PATH` | File path to the SQLite database | `./data/newvora.db` |
 | `RELOAD` | Uvicorn auto-reload flag for local development (`true` or `false`) | `false` |
