@@ -277,6 +277,3 @@ Newvora_HQ/
 
 ---
 
-## Challenge Note
-
-This project was conceived and built during the Hacktoberfest Weekend Challenge **"Build for a Friend"** (October 2 to 5, 2026). Any commits made after the challenge deadline (October 5, 2026, 12:29 PM IST) are strictly limited to documentation (README), screenshot placeholders, and UI label accuracy fixes.
